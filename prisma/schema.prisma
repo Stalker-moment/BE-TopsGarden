@@ -1,0 +1,337 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id              String           @id @default(uuid())
+  email           String           @unique
+  password        String
+  role            Role             @default(USER)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  contact         Contact?
+  notifications   Notification[]
+  sessions        Session[]
+  forgotPasswords ForgotPassword[]
+
+  carts    Cart[]
+  requests Request[]
+
+  // Relasi dengan Project
+  issuedProjects   Project[]           @relation("IssuedProjects")
+  assignedProjects ProjectAssignment[]
+
+  // Relasi dengan ProjectProcessUpdateNote sebagai author
+  projectNotes ProjectProcessUpdateNote[] @relation("AuthorNotes")
+}
+
+model Contact {
+  id        String   @id @default(uuid())
+  firstName String
+  lastName  String
+  email     String   @unique
+  phone     String
+  noreg     String?
+  birthday  String? // <-- Field Baru Ditambahkan di Sini
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  picture   String   @default("/default.png")
+  banner    String   @default("/default.jpg")
+  account   Account  @relation(fields: [id], references: [id])
+}
+
+model Session {
+  id             String     @id @default(uuid())
+  token          String     @unique
+  accountId      String
+  expiredAt      DateTime
+  device         DeviceList @default(MOBILE)
+  ip             String
+  region         String
+  city           String
+  loc            String
+  org            String
+  timezone       String
+  account        Account    @relation(fields: [accountId], references: [id])
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  lastAccessedAt DateTime   @default(now())
+}
+
+model Sensor {
+  id          String   @id @default(uuid())
+  voltage     Float
+  ph          Float
+  temperature Float
+  humidity    Float
+  ldr         Boolean
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Output {
+  id        String   @id @default(uuid())
+  name      String   @unique // Nama output misalnya "out1", "out2", dst.
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Hubungan ke OutputState
+  states OutputState[]
+}
+
+model OutputState {
+  id          String     @id @default(uuid())
+  outputId    String
+  output      Output     @relation(fields: [outputId], references: [id], onDelete: Cascade)
+  state       Boolean // Menyimpan apakah output aktif atau tidak
+  mode        OutputMode // Enum: MANUAL, AUTO_SUN, AUTO_DATETIME
+  turnOnTime  String? // Format waktu: "HH:mm"
+  turnOffTime String? // Format waktu: "HH:mm"
+  createdAt   DateTime   @default(now())
+}
+
+model ForgotPassword {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  accountId String
+  expiredAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  account   Account  @relation(fields: [accountId], references: [id])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  title     String
+  message   String
+  type      TypeNotification @default(BASIC)
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  accountId String
+  account   Account          @relation(fields: [accountId], references: [id])
+}
+
+enum OutputMode {
+  MANUAL
+  AUTO_SUN
+  AUTO_DATETIME
+}
+
+enum Role {
+  USER
+  ADMIN
+  DOSEN
+  MAHASISWA
+  MAGANG
+}
+
+enum DeviceList {
+  MOBILE
+  TABLET
+  DESKTOP
+  UNKNOWN
+}
+
+enum TypeNotification {
+  BASIC
+  INFO
+  WARNING
+  ERROR
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+  CANCELLED
+}
+
+// === Model Baru untuk Warehouse Stock System ===
+model Category {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?
+  products    Product[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Rack {
+  id        String    @id @default(uuid())
+  name      String
+  location  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  products  Product[]
+}
+
+model Product {
+  id           String           @id @default(uuid())
+  name         String
+  description  String?
+  categoryId   String
+  category     Category         @relation(fields: [categoryId], references: [id])
+  stock        Int              @default(0)
+  price        Float
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  images       ProductImage[]
+  cartItems    CartItem[]
+  requestItems RequestItem[]
+  bomItems     BillOfMaterial[]
+  rack         Rack[]
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  accountId String
+  account   Account    @relation(fields: [accountId], references: [id])
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  cartId    String
+  productId String
+  quantity  Int      @default(1)
+  product   Product  @relation(fields: [productId], references: [id])
+  cart      Cart     @relation(fields: [cartId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Request {
+  id          String           @id @default(uuid())
+  accountId   String
+  status      RequestStatus    @default(PENDING)
+  totalAmount Float
+  items       RequestItem[]
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  account     Account          @relation(fields: [accountId], references: [id])
+  histories   RequestHistory[]
+}
+
+model RequestItem {
+  id        String   @id @default(uuid())
+  requestId String
+  productId String
+  quantity  Int
+  product   Product  @relation(fields: [productId], references: [id])
+  request   Request  @relation(fields: [requestId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model RequestHistory {
+  id        String        @id @default(uuid())
+  requestId String
+  status    RequestStatus
+  changedAt DateTime      @default(now())
+  request   Request       @relation(fields: [requestId], references: [id])
+}
+
+model ProductImage {
+  id        String   @id @default(uuid())
+  productId String
+  path      String
+  product   Product  @relation(fields: [productId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+}
+
+// === Model Baru untuk Project Management ===
+
+model Project {
+  id          String              @id @default(uuid())
+  name        String
+  description String?
+  issuedById  String
+  issuedBy    Account             @relation("IssuedProjects", fields: [issuedById], references: [id])
+  assignments ProjectAssignment[]
+  flowSteps   ProjectFlowStep[]   @relation("ProjectFlowSteps")
+  bomItems    BillOfMaterial[]
+  status      ProjectStatus       @default(INITIATED)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+}
+
+model ProjectAssignment {
+  id         String   @id @default(uuid())
+  projectId  String
+  accountId  String
+  project    Project  @relation(fields: [projectId], references: [id])
+  account    Account  @relation(fields: [accountId], references: [id])
+  assignedAt DateTime @default(now())
+}
+
+model ProjectFlowStep {
+  id          String                     @id @default(uuid())
+  projectId   String
+  name        String
+  order       Int
+  status      StepStatus                 @default(PENDING)
+  startedAt   DateTime?
+  completedAt DateTime?
+  project     Project                    @relation("ProjectFlowSteps", fields: [projectId], references: [id])
+  createdAt   DateTime                   @default(now())
+  updatedAt   DateTime                   @updatedAt
+  updateNotes ProjectProcessUpdateNote[] @relation("FlowStepNotes")
+
+  @@unique([projectId, order])
+}
+
+model BillOfMaterial {
+  id        String   @id @default(uuid())
+  projectId String
+  productId String
+  quantity  Int
+  project   Project  @relation(fields: [projectId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+enum ProjectStatus {
+  INITIATED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum StepStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+// === Model Baru untuk Mencatat Catatan saat Memperbarui Proses Proyek ===
+
+model ProjectProcessUpdateNote {
+  id         String          @id @default(uuid())
+  flowStepId String
+  authorId   String
+  content    String
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  flowStep   ProjectFlowStep @relation("FlowStepNotes", fields: [flowStepId], references: [id])
+  author     Account         @relation("AuthorNotes", fields: [authorId], references: [id])
+}
