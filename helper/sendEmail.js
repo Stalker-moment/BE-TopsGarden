@@ -33,7 +33,7 @@ const sendEmail = async (to, subject, html) => {
     });
 
     const mailOptions = {
-      from: `"TEFA AKTI Support" <${EMAIL_AUTH_USER}>`,
+      from: `"TOPS Smart Garden Support" <${EMAIL_AUTH_USER}>`,
       to,
       subject,
       html,
@@ -57,47 +57,96 @@ const sendEmail = async (to, subject, html) => {
 const sendEmailResetPassword = async (to, token) => {
   const url = `${FRONTEND_URL}/reset-password?token=${token}`;
   console.log("Reset password URL:", url);
-  const subject = "Reset Your Password - TEFA AKTI";
+  const subject = "Reset Your Password - TOPS Smart Garden";
 
   const html = `
-  <head>
-    <title>Reset Password</title>
-    <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
-    <meta content="width=device-width" name="viewport">
-    <style>
-      @font-face { font-family: 'Poppins'; font-weight: 700; src: url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap'); }
-      @font-face { font-family: 'Poppins'; font-weight: 500; src: url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap'); }
-      body { background-color: #f4f4f5; font-family: 'Poppins', sans-serif; }
-      .primary-text { color: #000000; font-size: 16px; line-height: 24px; font-weight: 500; }
-      .button { background-color: #800000; border-radius: 28px; padding: 14px 28px; display: inline-block; font-size: 14px; font-weight: bold; color: white; text-decoration: none; }
-      .footer { background-color: #333; color: #ffffff; text-align: center; padding: 20px; font-size: 14px; }
-    </style>
+  <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="id">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reset Password</title>
+  <style type="text/css">
+    /* Fallback font declaration (dukungan terbatas di email) */
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
+
+    /* Client-specific resets */
+    body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
+    table { border-collapse: collapse !important; }
+    body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #f4f4f5; }
+
+    /* Gaya dasar untuk body, bisa ditimpa oleh inline styles */
+    body {
+        font-family: 'Poppins', Helvetica, Arial, sans-serif; /* Tambahkan fallback web-safe fonts */
+    }
+
+    /* Sembunyikan preheader text */
+    .preheader {
+        display: none !important;
+        visibility: hidden;
+        opacity: 0;
+        color: transparent;
+        height: 0;
+        width: 0;
+    }
+
+    /* Pastikan link tidak berwarna biru default di beberapa klien */
+    a { color: #800000; text-decoration: underline;} /* Default link color, bisa ditimpa */
+
+  </style>
   </head>
-  <body>
-    <table style="width: 100%; height: 100%; text-align: center;">
-      <tbody>
-        <tr>
-          <td>
-            <table align="center" style="background-color: #fff; width: 100%; max-width: 680px;">
-              <tbody>
+<body style="margin: 0 !important; padding: 0 !important; background-color: #f4f4f5;">
+
+  <div class="preheader" style="display: none !important; visibility: hidden; opacity: 0; color: transparent; height: 0; width: 0;">
+    Anda meminta reset password untuk akun TOPS Smart Garden Anda.
+  </div>
+
+  <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f5;">
+    <tr>
+      <td align="center" valign="top" style="padding: 20px 0;"> <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 680px; background-color: #ffffff; border-radius: 8px; overflow: hidden;"> <tr>
+            <td align="left" style="padding: 40px 50px;"> <h1 style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 32px; font-weight: 700; color: #000000; margin: 0 0 20px 0;">
+                Reset Password Anda
+              </h1>
+              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 16px; line-height: 24px; font-weight: 500; color: #333333; margin: 0 0 24px 0;">
+                Anda menerima email ini karena Anda (atau seseorang) meminta reset password untuk akun TOPS Smart Garden Anda. Jika ini bukan Anda, abaikan saja email ini.
+              </p>
+
+              <table border="0" cellspacing="0" cellpadding="0" role="presentation" style="margin: 24px 0;">
                 <tr>
-                  <td style="padding: 72px 120px;">
-                    <h1 style="font-size: 48px; font-weight: 700;">Reset Your Password</h1>
-                    <p class="primary-text">You're receiving this email because you requested a password reset for your TEFA AKTI account.</p>
-                    <p style="margin-top: 24px;">
-                      <a href="${url}" class="button">Reset Password</a>
-                    </p>
-                    <p class="primary-text" style="font-size: 12px;">* This link will expire in 1 hour.</p>
+                  <td align="center" bgcolor="#800000" style="border-radius: 28px;">
+                    <a href="${url}" target="_blank" style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 14px; font-weight: bold; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 28px; display: inline-block; border: 1px solid #800000;"> Reset Password
+                    </a>
                   </td>
                 </tr>
-              </tbody>
-            </table>
-            <div class="footer">© 2025 TEFA AKTI. All rights reserved.</div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+              </table>
+              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 12px; line-height: 18px; font-weight: 400; color: #555555; margin: 24px 0 0 0;">
+                * Link ini akan kedaluwarsa dalam 1 jam.
+              </p>
+              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 12px; line-height: 18px; font-weight: 400; color: #555555; margin: 10px 0 0 0;">
+                Jika tombol di atas tidak berfungsi, salin dan tempel URL berikut ke browser Anda: <br/> <a href="${url}" target="_blank" style="color: #800000; text-decoration: underline; word-break: break-all;">${url}</a>
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td bgcolor="#f4f4f5" align="center" style="padding: 30px 50px;"> <table border="0" cellpadding="0" cellspacing="0" width="100%">
+                 <tr>
+                   <td align="center" style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 14px; line-height: 20px; color: #666666;">
+                     &copy; 2025 TOPS Smart Garden. Semua hak dilindungi undang-undang.
+                     <br/><br/>
+                     </td>
+                 </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+        </td>
+    </tr>
+  </table>
   </body>
+</html>
   `;
 
   const emailSent = await sendEmail(to, subject, html);
