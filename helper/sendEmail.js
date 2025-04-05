@@ -59,6 +59,7 @@ const sendEmailResetPassword = async (to, token) => {
   console.log("Reset password URL:", url);
   const subject = "Reset Your Password - TOPS Smart Garden";
 
+  const currentYear = new Date().getFullYear();
   const html = `
   <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml" lang="id">
@@ -163,7 +164,7 @@ const sendEmailResetPassword = async (to, token) => {
                  <tr>
                    <td align="center" style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 12px; line-height: 18px; color: #558B2F; /* Hijau tua teks footer */">
                      <span class="unicode-icon" style="font-size: 14px; margin-right: 5px; vertical-align: baseline;">🌱</span>
-                     &copy; 2025 TOPS Smart Garden. All rights reserved. <br/>
+                     &copy; ${currentYear} TOPS Smart Garden. All rights reserved. <br/>
                      {/* */}
                    </td>
                  </tr>
