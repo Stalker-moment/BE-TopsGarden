@@ -115,7 +115,7 @@ const sendEmailResetPassword = async (to, token) => {
 
           <tr>
             <td align="center" style="padding: 40px 0 20px 0;">
-              <img src="https://garden.tierkun.com/images/logo/logo_Sw.svg" alt="TOPS Smart Garden Logo" width="140" style="display: block; font-family: sans-serif; font-size: 16px; color: #999999;">
+              <img src="https://garden.tierkun.com/images/logo/sw-removebg-preview.png" alt="TOPS Smart Garden Logo" width="140" style="display: block; font-family: sans-serif; font-size: 16px; color: #999999;">
               </td>
           </tr>
 
