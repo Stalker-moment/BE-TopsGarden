@@ -63,9 +63,11 @@ const deleteSession = async (sessionId) => {
 };
 
 router.post("/login", async (req, res) => {
-  const { email, password, remember } = req.body;
+  let { email, password, remember } = req.body;
   const ip = req.headers["x-forwarded-for"] || req.connection.remoteAddress;
   const ipInfo = await getIpInfo(ip);
+
+  email = email.toLowerCase();
 
   try {
     if (!email || !password) {
@@ -102,7 +104,9 @@ router.post("/login", async (req, res) => {
       expire,
     } = await createSession(account, ip, ipInfo, deviceType, expired);
 
-    return res.status(200).json({ token, deviceType: device, sessionId, expired: expired });
+    return res
+      .status(200)
+      .json({ token, deviceType: device, sessionId, expired: expired });
   } catch (error) {
     console.log(error);
     return res.status(500).json({ error: error.message });

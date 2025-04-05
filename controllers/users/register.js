@@ -10,8 +10,10 @@ const router = express.Router();
 const prisma = new PrismaClient();
 
 router.post("/register", async (req, res) => {
-  const { email, password, role, firstName, lastName, phone } = req.body;
+  let { email, password, role, firstName, lastName, phone } = req.body;
   const { authorization } = req.headers;
+
+  email = email.toLowerCase(); // Normalisasi email ke huruf kecil
 
   if (!authorization) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -22,7 +24,10 @@ router.post("/register", async (req, res) => {
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    if (!["ADMIN", "DOSEN"].includes(decoded.role) || decoded.expired < Date.now()) {
+    if (
+      !["ADMIN", "DOSEN"].includes(decoded.role) ||
+      decoded.expired < Date.now()
+    ) {
       return res.status(401).json({ error: "Unauthorized" });
     }
 

@@ -11,7 +11,18 @@ const prisma = new PrismaClient();
 const router = express.Router();
 
 router.post("/forgot/request", async (req, res) => {
-  const { email } = req.body;
+  let { email } = req.body;
+  email = email.toLowerCase(); // Normalisasi email ke huruf kecil
+  if (email.includes("@")) {
+    const emailParts = email.split("@");
+    emailParts[0] = emailParts[0].toLowerCase(); // Normalisasi bagian sebelum @
+    email = emailParts.join("@");
+  }
+  // Cek apakah email valid
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ message: "Invalid email format" });
+  }
 
   if (!email) {
     return res.status(400).json({ message: "Email is required" });
@@ -123,17 +134,23 @@ router.post("/forgot/validate", async (req, res) => {
   });
 
   if (!resetToken) {
-    return res.status(400).json({ message: "Invalid or expired token", valid: false });
+    return res
+      .status(400)
+      .json({ message: "Invalid or expired token", valid: false });
   }
 
   if (resetToken.expiredAt < new Date()) {
     await prisma.forgotPassword.delete({
       where: { token },
     });
-    return res.status(400).json({ message: "Invalid or expired token", valid: false });
+    return res
+      .status(400)
+      .json({ message: "Invalid or expired token", valid: false });
   }
 
-  return res.status(200).json({ success: true, message: "Token is valid", valid: true });
+  return res
+    .status(200)
+    .json({ success: true, message: "Token is valid", valid: true });
 });
 
 export default router;
