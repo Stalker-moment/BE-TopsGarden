@@ -65,78 +65,107 @@ const sendEmailResetPassword = async (to, token) => {
 <head>
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Reset Password</title>
+  <title>Reset Password - TOPS Smart Garden</title>
   <style type="text/css">
-    /* Fallback font declaration (dukungan terbatas di email) */
+    /* Font Import (Dukungan Terbatas di Email) */
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
 
-    /* Client-specific resets */
+    /* Resets Umum */
     body, table, td, a { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
-    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; border-collapse: collapse !important; }
     img { -ms-interpolation-mode: bicubic; border: 0; height: auto; line-height: 100%; outline: none; text-decoration: none; }
-    table { border-collapse: collapse !important; }
-    body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #f4f4f5; }
+    body { height: 100% !important; margin: 0 !important; padding: 0 !important; width: 100% !important; background-color: #fdfaf6; /* Krem lembut */ }
 
-    /* Gaya dasar untuk body, bisa ditimpa oleh inline styles */
+    /* Gaya Dasar & Fallbacks Font */
     body {
-        font-family: 'Poppins', Helvetica, Arial, sans-serif; /* Tambahkan fallback web-safe fonts */
+        font-family: 'Poppins', Helvetica, Arial, sans-serif; /* Prioritaskan Poppins */
     }
 
-    /* Sembunyikan preheader text */
-    .preheader {
-        display: none !important;
-        visibility: hidden;
-        opacity: 0;
-        color: transparent;
-        height: 0;
-        width: 0;
+    /* Sembunyikan Teks Preheader */
+    .preheader { display: none !important; visibility: hidden; opacity: 0; color: transparent; height: 0; width: 0; }
+
+    /* Gaya Link Default */
+    a { color: #4CAF50; /* Hijau daun */ text-decoration: underline; }
+
+    /* Efek Hover untuk Tombol (Progressive Enhancement) */
+    .button-link:hover {
+        background-color: #388E3C !important; /* Hijau lebih gelap */
+        border-color: #388E3C !important;
     }
 
-    /* Pastikan link tidak berwarna biru default di beberapa klien */
-    a { color: #800000; text-decoration: underline;} /* Default link color, bisa ditimpa */
+     /* Gaya untuk ikon unicode */
+    .unicode-icon {
+        color: #4CAF50; /* Warna ikon hijau */
+        font-size: 18px; /* Sesuaikan ukuran jika perlu */
+        display: inline-block;
+        line-height: 1;
+    }
 
   </style>
   </head>
-<body style="margin: 0 !important; padding: 0 !important; background-color: #f4f4f5;">
-
+<body style="margin: 0 !important; padding: 0 !important; background-color: #fdfaf6;">
   <div class="preheader" style="display: none !important; visibility: hidden; opacity: 0; color: transparent; height: 0; width: 0;">
-    Anda meminta reset password untuk akun TOPS Smart Garden Anda.
+    Reset password akun TOPS Smart Garden Anda.
   </div>
 
-  <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #f4f4f5;">
+  <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #fdfaf6;">
     <tr>
-      <td align="center" valign="top" style="padding: 20px 0;"> <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 680px; background-color: #ffffff; border-radius: 8px; overflow: hidden;"> <tr>
-            <td align="left" style="padding: 40px 50px;"> <h1 style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 32px; font-weight: 700; color: #000000; margin: 0 0 20px 0;">
-                Reset Password Anda
+      <td align="center" valign="top" style="padding: 40px 20px;">
+        <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; background-color: #ffffff; border-radius: 6px; border-top: 5px solid #4CAF50; /* Aksen garis hijau */ overflow: hidden;">
+
+          <tr>
+            <td align="center" style="padding: 40px 0 20px 0;">
+              <img src="https://via.placeholder.com/140x40?text=TOPS+Logo" alt="TOPS Smart Garden Logo" width="140" style="display: block; font-family: sans-serif; font-size: 16px; color: #999999;">
+              </td>
+          </tr>
+
+          <tr>
+            <td align="left" style="padding: 10px 40px 40px 40px;">
+              <h1 style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 24px; font-weight: 600; color: #3E2723; /* Coklat Tua */ margin: 0 0 25px 0; line-height: 1.3; text-align: center;">
+                <span class="unicode-icon" style="margin-right: 8px; vertical-align: baseline;">🌿</span>
+                Atur Ulang Password Anda
               </h1>
-              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 16px; line-height: 24px; font-weight: 500; color: #333333; margin: 0 0 24px 0;">
-                Anda menerima email ini karena Anda (atau seseorang) meminta reset password untuk akun TOPS Smart Garden Anda. Jika ini bukan Anda, abaikan saja email ini.
+              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 16px; line-height: 26px; font-weight: 400; color: #5D4037; /* Coklat Sedang */ margin: 0 0 25px 0; text-align: left;">
+                Halo, kami menerima permintaan untuk mengatur ulang password akun TOPS Smart Garden Anda. Silakan klik tombol hijau di bawah ini untuk membuat password baru.
               </p>
 
-              <table border="0" cellspacing="0" cellpadding="0" role="presentation" style="margin: 24px 0;">
+              <hr style="border: none; border-top: 2px solid #DCEDC8; /* Garis hijau muda */ margin: 30px 0;">
+
+              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 16px; line-height: 26px; font-weight: 400; color: #5D4037; margin: 0 0 25px 0; text-align: center;">
+                Klik tombol ini untuk melanjutkan:
+              </p>
+
+              <table border="0" cellpadding="0" cellspacing="0" width="100%" role="presentation">
                 <tr>
-                  <td align="center" bgcolor="#800000" style="border-radius: 28px;">
-                    <a href="${url}" target="_blank" style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 14px; font-weight: bold; color: #ffffff; text-decoration: none; padding: 14px 28px; border-radius: 28px; display: inline-block; border: 1px solid #800000;"> Reset Password
-                    </a>
-                  </td>
+                  <td align="center"> <table border="0" cellspacing="0" cellpadding="0" role="presentation" align="center" style="margin: 0;"> <tr>
+                        <td align="center" bgcolor="#4CAF50" style="border-radius: 25px;">
+                          <a href="${url}" target="_blank" class="button-link" style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none; padding: 14px 35px; border-radius: 25px; display: inline-block; border: 1px solid #4CAF50;">
+                            Buat Password Baru
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                    </td>
                 </tr>
               </table>
-              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 12px; line-height: 18px; font-weight: 400; color: #555555; margin: 24px 0 0 0;">
-                * Link ini akan kedaluwarsa dalam 1 jam.
+              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 13px; line-height: 20px; font-weight: 400; color: #8D6E63; /* Coklat Muda */ margin: 30px 0 15px 0; text-align: center;">
+                Link ini akan kedaluwarsa dalam 1 jam. Abaikan email ini jika Anda tidak merasa meminta reset password.
               </p>
-              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 12px; line-height: 18px; font-weight: 400; color: #555555; margin: 10px 0 0 0;">
-                Jika tombol di atas tidak berfungsi, salin dan tempel URL berikut ke browser Anda: <br/> <a href="${url}" target="_blank" style="color: #800000; text-decoration: underline; word-break: break-all;">${url}</a>
+              <p style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 12px; line-height: 18px; font-weight: 400; color: #9E9E9E; /* Abu-abu netral */ margin: 0; text-align: center;">
+                Tombol tidak berfungsi? Salin URL ini:<br/>
+                <a href="${url}" target="_blank" style="color: #4CAF50; text-decoration: underline; word-break: break-all;">${url}</a>
               </p>
             </td>
           </tr>
 
           <tr>
-            <td bgcolor="#f4f4f5" align="center" style="padding: 30px 50px;"> <table border="0" cellpadding="0" cellspacing="0" width="100%">
+            <td bgcolor="#F1F8E9" align="center" style="padding: 25px 40px; border-top: 1px solid #DCEDC8;"> <table border="0" cellpadding="0" cellspacing="0" width="100%">
                  <tr>
-                   <td align="center" style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 14px; line-height: 20px; color: #666666;">
-                     &copy; 2025 TOPS Smart Garden. Semua hak dilindungi undang-undang.
-                     <br/><br/>
-                     </td>
+                   <td align="center" style="font-family: 'Poppins', Helvetica, Arial, sans-serif; font-size: 12px; line-height: 18px; color: #558B2F; /* Hijau tua teks footer */">
+                     <span class="unicode-icon" style="font-size: 14px; margin-right: 5px; vertical-align: baseline;">🌱</span>
+                     &copy; 2025 TOPS Smart Garden. All rights reserved. <br/>
+                     {/* */}
+                   </td>
                  </tr>
               </table>
             </td>
