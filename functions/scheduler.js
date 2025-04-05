@@ -38,11 +38,13 @@ cron.schedule("*/10 * * * * *", async () => {
                 const offTime = moment.tz(lastState.turnOffTime, "HH:mm", "Asia/Jakarta");
 
                 if (onTime.isBefore(offTime)) {
-                    // Contoh: 08:00 - 17:00
+                    // Kasus normal: 08:00 - 17:00
                     newState = now.isBetween(onTime, offTime);
                 } else {
-                    // Contoh: 17:30 - 05:30 (melewati tengah malam)
-                    newState = now.isAfter(onTime) || now.isBefore(offTime);
+                    // Kasus melewati tengah malam: 17:30 - 05:30
+                    const inFirstRange = now.isSameOrAfter(onTime);
+                    const inSecondRange = now.isBefore(offTime);
+                    newState = inFirstRange || inSecondRange;
                 }
             }
 
