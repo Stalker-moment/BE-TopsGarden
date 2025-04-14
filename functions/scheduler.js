@@ -4,7 +4,7 @@ import moment from "moment-timezone";
 
 const prisma = new PrismaClient();
 
-// 🟢 Scheduler untuk AUTO_SUN dan AUTO_DATETIME
+// Scheduler jalan tiap 10 detik
 cron.schedule("*/10 * * * * *", async () => {
     try {
         console.log("⏳ Menjalankan pengecekan mode AUTO_DATETIME & AUTO_SUN...");
@@ -13,40 +13,47 @@ cron.schedule("*/10 * * * * *", async () => {
             include: {
                 states: {
                     orderBy: { createdAt: "desc" },
-                    take: 1, // Ambil status terbaru
+                    take: 1,
                 },
             },
         });
 
         const now = moment().tz("Asia/Jakarta");
-        const currentTime = now.format("HH:mm");
 
         for (const output of outputs) {
             const lastState = output.states[0];
-            if (!lastState) continue; // Skip jika tidak ada state sebelumnya
+            if (!lastState) continue;
 
-            let newState = lastState.state; // Default: tetap pada state sebelumnya
+            let newState = lastState.state;
 
-            // 🔵 Mode AUTO_SUN
+            // Mode AUTO_SUN
             if (lastState.mode === "AUTO_SUN") {
+                const currentTime = now.format("HH:mm");
                 newState = currentTime >= "17:30" || currentTime < "06:00";
             }
 
-            // 🟡 Mode AUTO_DATETIME
-            if (lastState.mode === "AUTO_DATETIME" && lastState.turnOnTime && lastState.turnOffTime) {
+            // Mode AUTO_DATETIME
+            if (
+                lastState.mode === "AUTO_DATETIME" &&
+                lastState.turnOnTime &&
+                lastState.turnOffTime
+            ) {
                 const onTime = moment.tz(lastState.turnOnTime, "HH:mm", "Asia/Jakarta");
-                const offTime = moment.tz(lastState.turnOffTime, "HH:mm", "Asia/Jakarta");
+                let offTime = moment.tz(lastState.turnOffTime, "HH:mm", "Asia/Jakarta");
 
-                if (onTime.isBefore(offTime)) {
-                    // Contoh: 08:00 - 17:00
-                    newState = now.isBetween(onTime, offTime);
-                } else {
-                    // Contoh: 17:30 - 05:30 (melewati tengah malam)
-                    newState = now.isAfter(onTime) || now.isBefore(offTime);
+                // Tambah hari ke offTime jika offTime < onTime (lintas tengah malam)
+                if (offTime.isBefore(onTime)) {
+                    if (now.isBefore(offTime)) {
+                        onTime.subtract(1, "day"); // Mundurkan onTime agar logika tetap valid
+                    } else {
+                        offTime.add(1, "day"); // Geser offTime ke hari berikutnya
+                    }
                 }
+
+                newState = now.isBetween(onTime, offTime);
             }
 
-            // ⬆️ Update ke DB jika ada perubahan
+            // Update state jika berubah
             if (newState !== lastState.state) {
                 await prisma.outputState.create({
                     data: {
@@ -58,7 +65,9 @@ cron.schedule("*/10 * * * * *", async () => {
                     },
                 });
 
-                console.log(`✅ Output ${output.name} berubah ke ${newState ? "HIDUP" : "MATI"} karena mode ${lastState.mode}`);
+                console.log(
+                    `✅ Output ${output.name} berubah ke ${newState ? "HIDUP" : "MATI"} karena mode ${lastState.mode}`
+                );
             }
         }
     } catch (error) {
