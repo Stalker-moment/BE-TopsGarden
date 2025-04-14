@@ -135,6 +135,8 @@ router.get("/outputs", async (req, res) => {
 
 router.get("/output-device", async (req, res) => {
   try {
+    const timestamp = new Date().toISOString(); // Ambil timestamp saat ini
+    console.log(`${timestamp} - Device IoT Mendapatkan semua output`);
     const outputs = await prisma.output.findMany({
       include: {
         states: {

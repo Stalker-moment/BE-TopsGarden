@@ -38,8 +38,9 @@ router.get("/sensor/:voltage/:ph/:temp/:humi/:ldr", async (req, res) => {
                 createdAt: new Date(),
             },
         });
-
-        console.log("Sensor data received:", { voltage, ph, temp, humi, ldr });
+        
+        const timestamp = new Date().toISOString();
+        console.log(`${timestamp} - Sensor Data Received: Voltage: ${voltage}, pH: ${ph}, Temperature: ${temp}, Humidity: ${humi}, LDR: ${ldr}`);
     
         res.status(200).json({ message: "Sensor data received successfully", data: { voltage, ph, temp, humi, ldr } });
     } catch (error) {
