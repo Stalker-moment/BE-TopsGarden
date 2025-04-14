@@ -33,7 +33,7 @@ async function handleDataSensorSocket(ws, req) {
       data = JSON.stringify(newData);
       //console.log("Data updated:", newData);
       const encryptedPayload = encryptData(newData);
-      ws.send(JSON.stringify(encryptedPayload));
+      ws.send(JSON.stringify(encryptedPayload));  
     }
   };
 

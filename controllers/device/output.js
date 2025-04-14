@@ -112,6 +112,8 @@ router.patch("/output/:id", async (req, res) => {
 // 🟢 Mendapatkan Semua Output
 router.get("/outputs", async (req, res) => {
   try {
+    const timestamp = new Date().toISOString(); // Ambil timestamp saat ini
+    console.log(`${timestamp} - Mendapatkan semua output`);
     const outputs = await prisma.output.findMany({
       include: {
         states: {
