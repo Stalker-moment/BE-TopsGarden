@@ -1,51 +1,87 @@
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
-dotenv.config();
-
 import sendSensor from "../functions/sendSensor.js";
 import encryptData from "../helper/encyptJson.js";
+
+dotenv.config();
+
+// Set berisi semua koneksi aktif untuk channel sensor
+const subscribers = new Set();
+let isLoopRunning = false;
+let lastPayloadString = null; // cache payload terenkripsi (string)
+
+async function broadcastLoop() {
+  if (isLoopRunning) return;
+  isLoopRunning = true;
+  const INTERVAL = Number(process.env.SENSOR_PUSH_INTERVAL_MS || 2000);
+  while (subscribers.size > 0) {
+    try {
+      const raw = await sendSensor();
+      const rawString = JSON.stringify(raw);
+      if (rawString !== lastPayloadString) {
+        const encrypted = encryptData(raw);
+        const out = JSON.stringify(encrypted);
+        lastPayloadString = rawString; // simpan versi asli untuk diff sederhana
+        for (const ws of [...subscribers]) {
+          if (ws.readyState === 1) {
+            ws.send(out);
+          } else {
+            subscribers.delete(ws);
+          }
+        }
+      }
+    } catch (e) {
+      console.error("[SensorWS] broadcast error:", e.message);
+    }
+    await new Promise(r => setTimeout(r, INTERVAL));
+  }
+  isLoopRunning = false;
+}
 
 async function handleDataSensorSocket(ws, req) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const token = url.searchParams.get("token");
-
   if (!token) {
-    return closeConnection(ws, "Token is required");
+    ws.send(JSON.stringify({ error: "Token is required" }));
+    return ws.close();
   }
-
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
     if (decoded.expiredAt < Date.now()) {
-      return closeConnection(ws, "Invalid or expired token");
+      ws.send(JSON.stringify({ error: "Invalid or expired token" }));
+      return ws.close();
     }
-
-  } catch (err) {
-    return closeConnection(ws, "Invalid or expired token");
+  } catch {
+    ws.send(JSON.stringify({ error: "Invalid or expired token" }));
+    return ws.close();
   }
 
-  let data = null;
+  subscribers.add(ws);
 
-  const sendUpdatedData = async () => {
-    const newData = await sendSensor();
-
-    if (JSON.stringify(newData) !== data) {
-      data = JSON.stringify(newData);
-      //console.log("Data updated:", newData);
-      const encryptedPayload = encryptData(newData);
-      ws.send(JSON.stringify(encryptedPayload));  
+  // Kirim snapshot awal jika sudah cache terenkripsi tersedia
+  if (lastPayloadString) {
+    try {
+      const raw = JSON.parse(lastPayloadString);
+      const encrypted = encryptData(raw);
+      ws.send(JSON.stringify(encrypted));
+    } catch {}
+  } else {
+    // Fetch sekali untuk klien baru jika belum ada cache (tidak menunggu interval)
+    try {
+      const raw = await sendSensor();
+      lastPayloadString = JSON.stringify(raw);
+      const encrypted = encryptData(raw);
+      ws.send(JSON.stringify(encrypted));
+    } catch (e) {
+      console.error("[SensorWS] initial fetch error:", e.message);
     }
-  };
+  }
 
-  sendUpdatedData();
-  const interval = setInterval(sendUpdatedData, 1000);
+  ws.on("close", () => {
+    subscribers.delete(ws);
+  });
 
-  ws.on("close", () => clearInterval(interval));
-}
-
-function closeConnection(ws, message) {
-  ws.send(JSON.stringify({ error: message }));
-  ws.close();
+  if (!isLoopRunning) broadcastLoop();
 }
 
 export default handleDataSensorSocket;

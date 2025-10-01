@@ -1,53 +1,49 @@
 import express from "express";
-import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
 import dotenv from "dotenv";
+import { addSensor } from "../../ingestion/sensorBuffer.js";
+import { prisma } from "../../prisma/client.js"; // (bisa dipakai jika fallback individual diperlukan)
 
 dotenv.config();
 
 const router = express.Router();
-const prisma = new PrismaClient();
 
 router.get("/sensor/:voltage/:ph/:temp/:humi/:ldr", async (req, res) => {
-    const voltage = parseFloat(req.params.voltage);
-    const ph = parseFloat(req.params.ph);
-    const temp = parseFloat(req.params.temp);
-    const humi = parseFloat(req.params.humi);
+    // Gunakan let karena akan normalisasi jika NaN
+    let voltage = parseFloat(req.params.voltage);
+    let ph = parseFloat(req.params.ph);
+    let temp = parseFloat(req.params.temp);
+    let humi = parseFloat(req.params.humi);
     let ldr = parseInt(req.params.ldr);
     
     try {
-        //if no data return 0
         if (isNaN(voltage)) voltage = 0;
         if (isNaN(ph)) ph = 0;
         if (isNaN(temp)) temp = 0;
         if (isNaN(humi)) humi = 0;
         if (isNaN(ldr)) ldr = 0;
 
-        //convert ldr to boolean (if 0 then true else false)
-        if (ldr === 0) ldr = true;
-        else ldr = false;
+        // convert ldr to boolean (if 0 then true else false)
+        const ldrBool = (ldr === 0);
 
-        //insert data to database
-        await prisma.sensor.create({
-            data: {
-                voltage: voltage,
-                ph: ph,
-                temperature: temp,
-                humidity: humi,
-                ldr: ldr,
-                createdAt: new Date(),
-            },
+        // Masukkan ke buffer (akan di-flush batch)
+        addSensor({
+            voltage,
+            ph,
+            temperature: temp,
+            humidity: humi,
+            ldr: ldrBool,
+            createdAt: new Date(),
+            updatedAt: new Date(),
         });
-        
+
         const timestamp = new Date().toISOString();
-        console.log(`${timestamp} - Sensor Data Received: Voltage: ${voltage}, pH: ${ph}, Temperature: ${temp}, Humidity: ${humi}, LDR: ${ldr}`);
+        console.log(`${timestamp} - Sensor Buffered: V:${voltage} pH:${ph} T:${temp} H:${humi} LDR:${ldrBool}`);
     
-        res.status(200).json({ message: "Sensor data received successfully", data: { voltage, ph, temp, humi, ldr } });
+        res.status(200).json({ message: "Sensor data received successfully", data: { voltage, ph, temp, humi, ldr: ldrBool } });
     } catch (error) {
-        console.error(error);
+        console.error("/sensor ingestion error", error);
         res.status(500).json({ message: "Internal Server Error" });
     }
-    }
-);
+});
 
 export default router;
