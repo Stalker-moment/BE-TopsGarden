@@ -23,9 +23,6 @@ import filesAssets from "./controllers/files/assets.js";
 import filesProfile from "./controllers/files/profile.js";
 import filesBanner from "./controllers/files/banner.js";
 import filesMachine from "./controllers/files/machine.js";
-import filesTools from "./controllers/files/tools.js";
-import filesWarehouse from "./controllers/files/warehouse.js";
-
 import notification from "./controllers/internal/notification.js";
 
 import handleDataAccountsSocket from "./sockets/dataAccounts.js";
@@ -33,8 +30,6 @@ import handleDataSessionId from "./sockets/dataSessionId.js";
 import handleDataSessionAccount from "./sockets/dataSessionAccount.js";
 import handleDataOutputSocket from "./sockets/dataOutput.js";
 import handleDataSensorSocket from "./sockets/dataSensor.js";
-
-import ManageWarehouse from "./controllers/feature/warehouseManage.js";
 
 import deviceSensor from "./controllers/device/receiveSensor.js";
 import deviceOutput from "./controllers/device/output.js";
@@ -76,11 +71,6 @@ app.use("/files", filesAssets);
 app.use("/files", filesProfile);
 app.use("/files", filesBanner);
 app.use("/files", filesMachine);
-app.use("/files", filesTools);
-app.use("/files", filesWarehouse);
-
-//===============[Feature Routes]=================//
-app.use("/api/feature", ManageWarehouse);
 
 //===============[Device Routes]=================//
 app.use("/api/device", deviceSensor);
