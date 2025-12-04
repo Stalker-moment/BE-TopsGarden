@@ -1,6 +1,9 @@
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
+import { createLogger } from "./logger.js";
 dotenv.config();
+
+const log = createLogger("EmailService");
 
 // Load environment variables safely
 const {
@@ -40,10 +43,10 @@ const sendEmail = async (to, subject, html) => {
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log("Email sent: " + info.response);
+    log.info("Email sent", { to, subject, response: info.response });
     return true; // Email berhasil dikirim
   } catch (error) {
-    console.error("Error sending email:", error);
+    log.error("Error sending email", error.message);
     return false; // Email gagal dikirim
   }
 };
@@ -56,7 +59,7 @@ const sendEmail = async (to, subject, html) => {
  */
 const sendEmailResetPassword = async (to, token) => {
   const url = `${FRONTEND_URL}/reset-password?token=${token}`;
-  console.log("Reset password URL:", url);
+  log.debug("Generate reset password URL", { to, url });
   const subject = "Reset Your Password - TOPS Smart Garden";
 
   const currentYear = new Date().getFullYear();

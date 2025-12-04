@@ -1,4 +1,7 @@
 import { prisma } from "../prisma/client.js";
+import { createLogger } from "../helper/logger.js";
+
+const log = createLogger("SendSensor");
 
 async function sendSensor() {
   try {
@@ -67,7 +70,7 @@ async function sendSensor() {
 
     return { latest, history };
   } catch (error) {
-    console.error("Error fetching sensors:", error);
+    log.error("Error fetching sensors", error.message);
     throw error;
   }
 }

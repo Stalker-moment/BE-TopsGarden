@@ -1,11 +1,12 @@
 import express from "express";
-import { PrismaClient } from "@prisma/client";
 import dotenv from "dotenv";
+import { prisma } from "../../prisma/client.js";
+import { createLogger } from "../../helper/logger.js";
 
 dotenv.config();
 
 const router = express.Router();
-const prisma = new PrismaClient();
+const log = createLogger("DeviceOutputController");
 
 // 🟢 Tambah Output Baru
 router.post("/output", async (req, res) => {
@@ -25,12 +26,14 @@ router.post("/output", async (req, res) => {
       data: { name },
     });
 
+    log.info("Output baru dibuat", { outputId: newOutput.id, name });
+
     res.status(201).json({
       message: "Output berhasil dibuat",
       output: newOutput,
     });
   } catch (error) {
-    console.error(error);
+    log.error("Gagal membuat output", error.message);
     res.status(500).json({ message: "Terjadi kesalahan server" });
   }
 });
@@ -58,7 +61,7 @@ router.put("/output/:id", async (req, res) => {
     // Jika mode adalah AUTO_DATETIME atau AUTO_SUN, state tidak boleh diubah oleh user
     if (mode === "AUTO_DATETIME" || mode === "AUTO_SUN") {
       state = lastState?.state ?? false; // Abaikan state dari user
-      console.log("State diabaikan karena mode AUTO_DATETIME atau AUTO_SUN");
+      log.warn("State diabaikan karena mode AUTO", { mode, requestedState: req.body.state });
     }
 
     // 🔥 Perbaikan: Hanya gunakan state sebelumnya jika mode AUTO_DATETIME / AUTO_SUN
@@ -72,12 +75,14 @@ router.put("/output/:id", async (req, res) => {
       },
     });
 
+    log.info("Output diperbarui", { outputId: id, mode, state: newState.state });
+
     res.status(200).json({
       message: "Output berhasil diperbarui",
       output: newState,
     });
   } catch (error) {
-    console.error(error);
+    log.error("Gagal memperbarui output", error.message);
     res.status(500).json({ message: "Terjadi kesalahan server" });
   }
 });
@@ -99,12 +104,14 @@ router.patch("/output/:id", async (req, res) => {
       data: { name },
     });
 
+    log.info("Nama output diperbarui", { outputId: id, name });
+
     res.status(200).json({
       message: "Nama output berhasil diperbarui",
       output: updatedOutput,
     });
   } catch (error) {
-    console.error(error);
+    log.error("Gagal memperbarui nama output", error.message);
     res.status(500).json({ message: "Terjadi kesalahan server" });
   }
 });
@@ -112,8 +119,7 @@ router.patch("/output/:id", async (req, res) => {
 // 🟢 Mendapatkan Semua Output
 router.get("/outputs", async (req, res) => {
   try {
-    const timestamp = new Date().toISOString(); // Ambil timestamp saat ini
-    console.log(`${timestamp} - Mendapatkan semua output`);
+    log.info("Mengambil semua output");
     const outputs = await prisma.output.findMany({
       include: {
         states: {
@@ -128,15 +134,14 @@ router.get("/outputs", async (req, res) => {
       outputs,
     });
   } catch (error) {
-    console.error(error);
+    log.error("Gagal mengambil semua output", error.message);
     res.status(500).json({ message: "Terjadi kesalahan server" });
   }
 });
 
 router.get("/output-device", async (req, res) => {
   try {
-    const timestamp = new Date().toISOString(); // Ambil timestamp saat ini
-    console.log(`${timestamp} - Device IoT Mendapatkan semua output`);
+    log.info("Device IoT mengambil output");
     const outputs = await prisma.output.findMany({
       include: {
         states: {
@@ -153,7 +158,7 @@ router.get("/output-device", async (req, res) => {
 
     res.status(200).json(formattedResponse);
   } catch (error) {
-    console.error(error);
+    log.error("Device IoT gagal mengambil output", error.message);
     res.status(500).json({ message: "Terjadi kesalahan server" });
   }
 });
@@ -182,7 +187,7 @@ router.get("/output/:id", async (req, res) => {
       output,
     });
   } catch (error) {
-    console.error(error);
+    log.error("Gagal mengambil detail output", { error: error.message, outputId: req.params.id });
     res.status(500).json({ message: "Terjadi kesalahan server" });
   }
 });

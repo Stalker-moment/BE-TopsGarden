@@ -1,13 +1,14 @@
 import cron from "node-cron";
-import { PrismaClient } from "@prisma/client";
 import moment from "moment-timezone";
+import { prisma } from "../prisma/client.js";
+import { createLogger } from "../helper/logger.js";
 
-const prisma = new PrismaClient();
+const log = createLogger("Scheduler");
 
 // Scheduler jalan tiap 10 detik
 cron.schedule("*/10 * * * * *", async () => {
     try {
-        console.log("⏳ Menjalankan pengecekan mode AUTO_DATETIME & AUTO_SUN...");
+        log.info("Menjalankan pengecekan mode AUTO");
 
         const outputs = await prisma.output.findMany({
             include: {
@@ -65,12 +66,14 @@ cron.schedule("*/10 * * * * *", async () => {
                     },
                 });
 
-                console.log(
-                    `✅ Output ${output.name} berubah ke ${newState ? "HIDUP" : "MATI"} karena mode ${lastState.mode}`
-                );
+                log.info("Output berubah karena mode", {
+                    outputName: output.name,
+                    state: newState,
+                    mode: lastState.mode,
+                });
             }
         }
     } catch (error) {
-        console.error("❌ Error pada scheduler:", error);
+        log.error("Error pada scheduler", error.message);
     }
 });

@@ -1,11 +1,12 @@
 import express from "express";
 import dotenv from "dotenv";
 import { addSensor } from "../../ingestion/sensorBuffer.js";
-import { prisma } from "../../prisma/client.js"; // (bisa dipakai jika fallback individual diperlukan)
+import { createLogger } from "../../helper/logger.js";
 
 dotenv.config();
 
 const router = express.Router();
+const log = createLogger("DeviceSensorController");
 
 router.get("/sensor/:voltage/:ph/:temp/:humi/:ldr", async (req, res) => {
     // Gunakan let karena akan normalisasi jika NaN
@@ -36,12 +37,11 @@ router.get("/sensor/:voltage/:ph/:temp/:humi/:ldr", async (req, res) => {
             updatedAt: new Date(),
         });
 
-        const timestamp = new Date().toISOString();
-        console.log(`${timestamp} - Sensor Buffered: V:${voltage} pH:${ph} T:${temp} H:${humi} LDR:${ldrBool}`);
+        log.debug("Sensor buffered", { voltage, ph, temperature: temp, humidity: humi, ldr: ldrBool });
     
         res.status(200).json({ message: "Sensor data received successfully", data: { voltage, ph, temp, humi, ldr: ldrBool } });
     } catch (error) {
-        console.error("/sensor ingestion error", error);
+        log.error("Sensor ingestion error", error.message);
         res.status(500).json({ message: "Internal Server Error" });
     }
 });

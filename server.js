@@ -10,6 +10,7 @@ import http from "http";
 import cronjob from "node-cron";
 import pkg from "jsonwebtoken";
 const { verify } = pkg;
+import { createLogger } from "./helper/logger.js";
 
 dotenv.config();
 
@@ -30,6 +31,7 @@ import handleDataSessionId from "./sockets/dataSessionId.js";
 import handleDataSessionAccount from "./sockets/dataSessionAccount.js";
 import handleDataOutputSocket from "./sockets/dataOutput.js";
 import handleDataSensorSocket from "./sockets/dataSensor.js";
+import handleDataLogsSocket from "./sockets/dataLogs.js";
 
 import deviceSensor from "./controllers/device/receiveSensor.js";
 import deviceOutput from "./controllers/device/output.js";
@@ -38,6 +40,7 @@ import deviceOutput from "./controllers/device/output.js";
 import "./functions/scheduler.js";
 
 const app = express();
+const log = createLogger("Server");
 
 //-----------------Configuration------------------//
 app.use(bodyParser.json());
@@ -90,6 +93,7 @@ wss.on("connection", (ws, req) => {
     "/dataSessionAccount": handleDataSessionAccount,
     "/dataOutput": handleDataOutputSocket,
     "/dataSensor": handleDataSensorSocket,
+    "/logs": handleDataLogsSocket,
   };
 
   const matchedRoute = Object.keys(routes).find((route) =>
@@ -97,15 +101,16 @@ wss.on("connection", (ws, req) => {
   );
 
   if (matchedRoute) {
-    console.log(`Connected to ${matchedRoute}`);
+    log.info("WebSocket connected", { route: matchedRoute, ip: req.socket.remoteAddress });
     routes[matchedRoute](ws, req);
   } else {
+    log.warn("WebSocket invalid route", { url: req.url });
     ws.send(JSON.stringify({ error: "Invalid request URL" }));
     ws.close();
   }
 });
 
 server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-  console.log(`WebSocket server is running on ws://localhost:${PORT}`);
+  log.info("Server started", { port: PORT });
+  log.info("WebSocket server ready", { url: `ws://localhost:${PORT}` });
 });
