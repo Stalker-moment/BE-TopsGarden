@@ -116,22 +116,40 @@ router.patch("/output/:id", async (req, res) => {
   }
 });
 
-// 🟢 Mendapatkan Semua Output
+// 🟢 Mendapatkan Semua Output dengan Pagination
 router.get("/outputs", async (req, res) => {
   try {
-    log.info("Mengambil semua output");
-    const outputs = await prisma.output.findMany({
-      include: {
-        states: {
-          orderBy: { createdAt: "desc" },
-          take: 1, // Ambil status terbaru
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.max(parseInt(req.query.limit, 10) || 10, 1);
+    const skip = (page - 1) * limit;
+
+    log.info("Mengambil semua output dengan pagination", { page, limit });
+
+    const [outputs, total] = await Promise.all([
+      prisma.output.findMany({
+        skip,
+        take: limit,
+        include: {
+          states: {
+            orderBy: { createdAt: "desc" },
+            take: 1,
+          },
         },
-      },
-    });
+      }),
+      prisma.output.count(),
+    ]);
 
     res.status(200).json({
-      message: "Data semua output berhasil diambil",
-      outputs,
+      message: "Data output berhasil diambil",
+      data: {
+        items: outputs,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
     });
   } catch (error) {
     log.error("Gagal mengambil semua output", error.message);
