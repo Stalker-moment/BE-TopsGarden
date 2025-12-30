@@ -102,7 +102,7 @@ router.get("/history", async (req, res) => {
       startDate: range.start,
       endDate: range.end,
       limit: range.limit,
-      forceFullTimestamp: true,
+      timestampFormat: "clock",
     });
 
     return res.status(200).json({

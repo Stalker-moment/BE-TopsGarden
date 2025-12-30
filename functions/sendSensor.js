@@ -90,7 +90,13 @@ function formatLatest(row) {
 
 async function sendSensor(options = {}) {
   try {
-    const { startDate, endDate, limit, forceFullTimestamp = false } = options;
+    const {
+      startDate,
+      endDate,
+      limit,
+      forceFullTimestamp = false,
+      timestampFormat,
+    } = options;
     const start = normalizeDate(startDate, "startDate");
     const end = normalizeDate(endDate, "endDate");
     const hasRange = Boolean(start || end);
@@ -134,7 +140,16 @@ async function sendSensor(options = {}) {
 
     const timeline = orderDirection === "desc" ? [...sensors].reverse() : sensors;
     const latestRow = timeline[timeline.length - 1];
-    const timestampFormatter = forceFullTimestamp || hasRange ? formatIso : formatClock;
+    let timestampFormatter;
+    if (timestampFormat === "clock") {
+      timestampFormatter = formatClock;
+    } else if (timestampFormat === "iso") {
+      timestampFormatter = formatIso;
+    } else if (forceFullTimestamp) {
+      timestampFormatter = formatIso;
+    } else {
+      timestampFormatter = hasRange ? formatIso : formatClock;
+    }
 
     return {
       latest: formatLatest(latestRow),

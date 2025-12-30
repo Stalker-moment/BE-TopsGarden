@@ -95,9 +95,9 @@ curl -X GET "https://localhost:1777/api/sensor/history?startDate=2025-04-05T00:0
     "temperature": {
       "value": [26.9, 27.4, 28.1],
       "timestamp": [
-        "2025-04-05T12:00:00.000Z",
-        "2025-04-05T12:05:00.000Z",
-        "2025-04-05T12:10:00.000Z"
+        "12:00:05",
+        "12:05:05",
+        "12:10:05"
       ]
     },
     "humidity": { "value": [...], "timestamp": [...] },
@@ -111,10 +111,12 @@ curl -X GET "https://localhost:1777/api/sensor/history?startDate=2025-04-05T00:0
     "temperature": 28.1,
     "humidity": 62.3,
     "ldr": false,
-    "updatedAt": "2025-04-05T23:59:20.000Z"
+    "updatedAt": "23:59:20"
   }
 }
 ```
+
+> Mulai sekarang `data.*.timestamp` berisi string jam lokal `HH:mm:ss` sehingga langsung siap pakai untuk visualisasi detik.
 
 ### JavaScript Fetch Sample
 ```javascript
