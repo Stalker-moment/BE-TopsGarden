@@ -11,6 +11,111 @@ const subscribers = new Set();
 let isLoopRunning = false;
 let lastPayloadString = null; // cache payload terenkripsi (string)
 const log = createLogger("SensorSocket");
+const HISTORY_EVENTS = Object.freeze({
+  REQUEST: "historyRequest",
+  RESPONSE: "historyResponse",
+  ERROR: "historyError",
+});
+const HISTORY_MAX_RANGE_DAYS = Number(process.env.SENSOR_HISTORY_MAX_RANGE_DAYS || 30);
+const HISTORY_MAX_LIMIT = Number(process.env.SENSOR_HISTORY_MAX_LIMIT || 2000);
+
+const sendEncrypted = (ws, payload) => {
+  if (ws.readyState !== 1) return;
+  ws.send(JSON.stringify(encryptData(payload)));
+};
+
+const parseDateInput = (value, label) => {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`${label} tidak valid`);
+  }
+  return date;
+};
+
+const sanitizeHistoryPayload = (payload) => {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Payload history tidak valid");
+  }
+
+  const { startDate, endDate, date } = payload;
+  let start = null;
+  let end = null;
+
+  if (date && !startDate && !endDate) {
+    const target = parseDateInput(date, "date");
+    start = new Date(target);
+    start.setHours(0, 0, 0, 0);
+    end = new Date(target);
+    end.setHours(23, 59, 59, 999);
+  } else {
+    start = parseDateInput(startDate, "startDate");
+    end = parseDateInput(endDate, "endDate");
+  }
+
+  if (!start || !end) {
+    throw new Error("startDate & endDate wajib diisi atau gunakan parameter date");
+  }
+
+  if (start > end) {
+    throw new Error("startDate harus lebih kecil dari endDate");
+  }
+
+  const diffDays = (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24);
+  if (diffDays > HISTORY_MAX_RANGE_DAYS) {
+    throw new Error(`Rentang maksimal ${HISTORY_MAX_RANGE_DAYS} hari`);
+  }
+
+  let limit = null;
+  if (payload.limit !== undefined && payload.limit !== null) {
+    const requestedLimit = Number(payload.limit);
+    if (!Number.isFinite(requestedLimit) || requestedLimit <= 0) {
+      throw new Error("limit harus berupa angka positif");
+    }
+    limit = Math.min(Math.floor(requestedLimit), HISTORY_MAX_LIMIT);
+  }
+
+  return { start, end, limit };
+};
+
+const handleHistoryRequest = async (ws, payload) => {
+  const requestId = payload.requestId ?? null;
+  try {
+    const { start, end, limit } = sanitizeHistoryPayload(payload);
+    log.info("History sensor diminta", {
+      requestId,
+      start: start.toISOString(),
+      end: end.toISOString(),
+      limit,
+    });
+    const result = await sendSensor({
+      startDate: start,
+      endDate: end,
+      limit,
+      forceFullTimestamp: true,
+    });
+
+    sendEncrypted(ws, {
+      type: HISTORY_EVENTS.RESPONSE,
+      requestId,
+      range: {
+        start: start.toISOString(),
+        end: end.toISOString(),
+      },
+      limit,
+      total: result.history.temperature.value.length,
+      history: result.history,
+      latest: result.latest,
+    });
+  } catch (error) {
+    log.warn("History sensor gagal", { requestId, error: error.message });
+    sendEncrypted(ws, {
+      type: HISTORY_EVENTS.ERROR,
+      requestId,
+      message: error.message,
+    });
+  }
+};
 
 async function broadcastLoop() {
   if (isLoopRunning) return;
@@ -89,6 +194,25 @@ async function handleDataSensorSocket(ws, req) {
   ws.on("close", () => {
     subscribers.delete(ws);
     log.info("Client terputus", { totalSubscribers: subscribers.size });
+  });
+
+  ws.on("message", (raw) => {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw.toString());
+    } catch (e) {
+      log.warn("Pesan websocket invalid", e.message);
+      return sendEncrypted(ws, {
+        type: HISTORY_EVENTS.ERROR,
+        message: "Format pesan harus JSON",
+      });
+    }
+
+    if (parsed?.type !== HISTORY_EVENTS.REQUEST) {
+      return;
+    }
+
+    void handleHistoryRequest(ws, parsed);
   });
 
   if (!isLoopRunning) broadcastLoop();
