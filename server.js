@@ -35,6 +35,7 @@ import handleDataLogsSocket from "./sockets/dataLogs.js";
 
 import deviceSensor from "./controllers/device/receiveSensor.js";
 import deviceOutput from "./controllers/device/output.js";
+import sensorHistory from "./controllers/sensor/history.js";
 
 //import cronjob from "./functions/scheduler.js";
 import "./functions/scheduler.js";
@@ -78,6 +79,7 @@ app.use("/files", filesMachine);
 //===============[Device Routes]=================//
 app.use("/api/device", deviceSensor);
 app.use("/api/device", deviceOutput);
+app.use("/api/sensor", sensorHistory);
 
 app.use((req, res) => {
   res.status(404).send({ error: "Not found" });

@@ -1,28 +1,33 @@
-# Data Sensor WebSocket Guide
+# Data Sensor Streaming Guide
 
-Panduan ini menjelaskan cara menggunakan kanal WebSocket `/dataSensor` untuk menerima data sensor secara realtime maupun historis.
+Dokumen ini merangkum dua jalur akses data sensor:
+
+1. WebSocket `/dataSensor` untuk data realtime.
+2. REST API `GET /api/sensor/history` untuk data historis sesuai rentang tanggal.
 
 ## Ikhtisar
-- **Endpoint dasar**: `ws://<host>:<port>/dataSensor?token=<JWT>`
-- **Autentikasi**: parameter query `token` berisi JWT valid (`JWT_SECRET`). Token kedaluwarsa atau tidak ada akan ditolak.
-- **Enkripsi payload**: seluruh payload yang dikirim server atau dikirim balik ke klien melalui `ws.send()` sudah dibungkus helper `encryptData` (`helper/encyptJson.js`). Klien wajib mendekripsi menggunakan `WS_SECRET_KEY` yang sama.
-- **Polling internal**: server melakukan push setiap `SENSOR_PUSH_INTERVAL_MS` (default 2000 ms) hanya saat ada perubahan dataset.
+- **Realtime**: `ws://<host>:<port>/dataSensor?token=<JWT>`
+- **History API**: `GET https://<host>/api/sensor/history`
+- **Autentikasi**:
+  - WebSocket: query `token=<JWT>`.
+  - REST API: header `Authorization: Bearer <JWT>`.
+- **Enkripsi WebSocket**: payload terenkripsi AES-256-CBC memakai `WS_SECRET_KEY`. API history merespons JSON biasa.
 
-## Variabel Lingkungan Terkait
+## Variabel Lingkungan Penting
 | Nama | Deskripsi | Default |
 | --- | --- | --- |
-| `SENSOR_PUSH_INTERVAL_MS` | Interval loop broadcast realtime (ms) | `2000` |
-| `SENSOR_RECENT_LIMIT` | Jumlah data terakhir untuk snapshot realtime | `10` |
-| `SENSOR_HISTORY_DEFAULT_LIMIT` | Limit default saat permintaan history tanpa limit eksplisit | `288` |
-| `SENSOR_HISTORY_MAX_LIMIT` | Limit maksimum yang diizinkan untuk permintaan history | `2000` |
+| `SENSOR_PUSH_INTERVAL_MS` | Interval push realtime | `2000` |
+| `SENSOR_RECENT_LIMIT` | Jumlah data sejarah singkat pada payload realtime | `10` |
+| `SENSOR_HISTORY_DEFAULT_LIMIT` | Limit default history ketika tidak ditentukan | `288` |
+| `SENSOR_HISTORY_MAX_LIMIT` | Limit maksimum data history per permintaan | `2000` |
 | `SENSOR_HISTORY_MAX_RANGE_DAYS` | Rentang hari maksimum untuk query history | `30` |
-| `WS_SECRET_KEY` | Kunci AES-256-CBC untuk enkripsi payload | — |
-| `JWT_SECRET` | Kunci signing token | — |
+| `WS_SECRET_KEY` | Kunci enkripsi WebSocket | — |
+| `JWT_SECRET` | Secret untuk menandatangani token | — |
 
-## Alur Realtime
-1. Klien membuka koneksi ke endpoint dengan token valid.
-2. Server menambahkan klien ke set subscriber dan langsung mengirim snapshot terbaru (hasil `sendSensor()` tanpa filter).
-3. Saat ada pembaruan data sensor (atau ketika cache kosong), server menyiapkan payload:
+## WebSocket Realtime `/dataSensor`
+1. Buka koneksi dengan token valid: `new WebSocket("ws://localhost:1777/dataSensor?token=<JWT>")`.
+2. Server mengirim snapshot awal begitu koneksi sukses.
+3. Setiap perubahan data sensor memicu payload baru:
    ```jsonc
    {
      "latest": {
@@ -37,56 +42,69 @@ Panduan ini menjelaskan cara menggunakan kanal WebSocket `/dataSensor` untuk men
        "temperature": {
          "value": [27.2, 27.3, 27.4],
          "timestamp": ["14:20:30", "14:21:30", "14:22:30"]
-       },
-       "...": {}
+       }
      }
    }
    ```
-4. Payload di-enkripsi dan dikirim ke semua subscriber.
+4. Payload dikirim dalam kemasan terenkripsi `{ iv, content }`. Klien harus mendekripsi memakai `WS_SECRET_KEY`.
 
-> **Catatan**: `latest.updatedAt` menggunakan format jam lokal (`HH:mm:ss`).
+> `latest.updatedAt` memakai format lokal `HH:mm:ss` untuk kemudahan tampilan dashboard.
 
-## Permintaan Data Historis
-Selain stream realtime, klien dapat meminta data historis melalui pesan WebSocket setelah koneksi terbentuk.
+### Contoh Klien Realtime
+```javascript
+import { decryptPayload } from "./crypto.js";
 
-### Format Permintaan
-```json
-{
-  "type": "historyRequest",
-  "requestId": "chart-2025-04-05",
-  "startDate": "2025-04-05T00:00:00Z",
-  "endDate": "2025-04-05T23:59:59Z",
-  "limit": 500
-}
+const ws = new WebSocket("ws://localhost:1777/dataSensor?token=<JWT>");
+ws.onmessage = (event) => {
+  const decrypted = decryptPayload(JSON.parse(event.data));
+  renderRealtime(decrypted.latest, decrypted.history);
+};
 ```
 
-Alternatif: kirim satu field `date` untuk otomatis mengambil rentang satu hari penuh.
-```json
-{
-  "type": "historyRequest",
-  "requestId": "chart-2025-04-05",
-  "date": "2025-04-05"
-}
-```
+## REST API History `/api/sensor/history`
+- **Method**: `GET`
+- **Header**: `Authorization: Bearer <JWT>`
+- **Query Parameters**:
 
-### Aturan Validasi
-- `startDate` dan `endDate` wajib ada kecuali menggunakan `date`.
-- `startDate` ≤ `endDate`.
-- Rentang tidak boleh melebihi `SENSOR_HISTORY_MAX_RANGE_DAYS`.
-- `limit` opsional; jika tidak diisi server memakai default (`SENSOR_HISTORY_DEFAULT_LIMIT`). Nilai limit tidak boleh melampaui `SENSOR_HISTORY_MAX_LIMIT`.
-- Semua tanggal harus valid ISO 8601.
+| Nama | Contoh | Wajib | Keterangan |
+| --- | --- | --- | --- |
+| `startDate` | `2025-04-05T00:00:00Z` | Ya* | Gunakan bersama `endDate`. ISO 8601. |
+| `endDate` | `2025-04-05T23:59:59Z` | Ya* | Harus >= `startDate`. |
+| `date` | `2025-04-05` | Alternatif | Jika diisi, server otomatis mengambil satu hari penuh dan `startDate/endDate` boleh dikosongkan. |
+| `limit` | `500` | Opsional | Positive integer, dibatasi `SENSOR_HISTORY_MAX_LIMIT`. |
+
+`startDate`/`endDate` wajib kecuali Anda memakai `date` tunggal.
+
+### Contoh Permintaan
+```bash
+curl -X GET "https://localhost:1777/api/sensor/history?startDate=2025-04-05T00:00:00Z&endDate=2025-04-05T23:59:59Z&limit=500" \
+  -H "Authorization: Bearer <JWT>"
+```
 
 ### Respons Berhasil
 ```json
 {
-  "type": "historyResponse",
-  "requestId": "chart-2025-04-05",
+  "message": "Sensor history fetched",
   "range": {
     "start": "2025-04-05T00:00:00.000Z",
     "end": "2025-04-05T23:59:59.999Z"
   },
   "limit": 500,
   "total": 480,
+  "data": {
+    "temperature": {
+      "value": [26.9, 27.4, 28.1],
+      "timestamp": [
+        "2025-04-05T12:00:00.000Z",
+        "2025-04-05T12:05:00.000Z",
+        "2025-04-05T12:10:00.000Z"
+      ]
+    },
+    "humidity": { "value": [...], "timestamp": [...] },
+    "voltage": { "value": [...], "timestamp": [...] },
+    "ph": { "value": [...], "timestamp": [...] },
+    "ldr": { "value": [...], "timestamp": [...] }
+  },
   "latest": {
     "voltage": 12.0,
     "ph": 6.5,
@@ -94,77 +112,33 @@ Alternatif: kirim satu field `date` untuk otomatis mengambil rentang satu hari p
     "humidity": 62.3,
     "ldr": false,
     "updatedAt": "2025-04-05T23:59:20.000Z"
-  },
-  "history": {
-    "temperature": {
-      "value": [26.9, 27.4, 28.1, "..."],
-      "timestamp": [
-        "2025-04-05T12:00:00.000Z",
-        "2025-04-05T12:05:00.000Z",
-        "2025-04-05T12:10:00.000Z",
-        "..."
-      ]
-    },
-    "humidity": { "...": "..." },
-    "voltage": { "...": "..." },
-    "ph": { "...": "..." },
-    "ldr": { "...": "..." }
   }
 }
 ```
-- `total` menunjukkan jumlah baris yang dikembalikan untuk rentang tersebut.
-- `history.*.timestamp` selalu dalam ISO string saat permintaan history aktif (agar mudah dipetakan ke chart time-series).
 
-### Respons Error
-Jika validasi gagal atau range terlalu besar, server mengirim:
-```json
-{
-  "type": "historyError",
-  "requestId": "chart-2025-04-05",
-  "message": "Rentang maksimal 30 hari"
-}
-```
-
-## Contoh Klien (Browser)
+### JavaScript Fetch Sample
 ```javascript
-import { decryptPayload } from "./crypto.js"; // gunakan WS_SECRET_KEY yang sama
-
-const ws = new WebSocket("ws://localhost:1777/dataSensor?token=<JWT>");
-
-ws.onopen = () => {
-  console.log("connected");
-
-  ws.send(JSON.stringify({
-    type: "historyRequest",
-    requestId: "chart-2025-04-05",
-    date: "2025-04-05"
-  }));
-};
-
-ws.onmessage = (event) => {
-  const envelope = JSON.parse(event.data);
-  const payload = decryptPayload(envelope); // hasil decrypt JSON asli
-
-  if (payload.type === "historyResponse") {
-    renderHistory(payload.history);
-  } else if (payload.type === "historyError") {
-    console.error("History error", payload.message);
-  } else {
-    renderRealtime(payload.latest, payload.history);
-  }
-};
-
-ws.onclose = () => console.log("disconnected");
+async function fetchHistory({ startDate, endDate, limit, token }) {
+  const params = new URLSearchParams({ startDate, endDate });
+  if (limit) params.append("limit", String(limit));
+  const res = await fetch(`/api/sensor/history?${params}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
 ```
 
 ## Troubleshooting
-- **`Token is required`**: tambahkan query `?token=<JWT>` saat membuka WebSocket.
-- **`Invalid or expired token`**: pastikan JWT belum kedaluwarsa dan memakai `JWT_SECRET` terbaru.
-- **`Rentang maksimal X hari`**: perkecil rentang `startDate/endDate` atau gunakan pagination `limit`.
-- **Payload tidak bisa didekripsi**: cek `WS_SECRET_KEY` antara server dan klien serta IV/Content yang diterima.
+- **`Token is required`**: tambahkan query token di WebSocket atau header Bearer pada API.
+- **`Invalid or expired token`**: JWT sudah kedaluwarsa/tidak valid.
+- **`Rentang maksimal X hari`**: perkecil jarak tanggal.
+- **`limit harus berupa angka positif`**: masukkan bilangan bulat > 0.
+- **Payload WebSocket tidak bisa didekripsi**: pastikan `WS_SECRET_KEY` sama dan gunakan IV serta ciphertext sesuai respons.
 
 ---
 Referensi kode utama:
 - [sockets/dataSensor.js](../sockets/dataSensor.js)
+- [controllers/sensor/history.js](../controllers/sensor/history.js)
 - [functions/sendSensor.js](../functions/sendSensor.js)
 - [helper/encyptJson.js](../helper/encyptJson.js)
