@@ -58,6 +58,19 @@ model Session {
   account        Account    @relation(fields: [accountId], references: [id])
 }
 
+model Sensor {
+  id          String   @id @default(uuid())
+  voltage     Float
+  ph          Float
+  temperature Float
+  humidity    Float
+  ldr         Boolean
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([createdAt])
+}
+
 model Output {
   id        String        @id @default(uuid())
   name      String        @unique
