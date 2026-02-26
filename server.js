@@ -32,11 +32,9 @@ import handleDataSessionAccount from "./sockets/dataSessionAccount.js";
 import handleDataOutputSocket from "./sockets/dataOutput.js";
 import handleDataSensorSocket from "./sockets/dataSensor.js";
 import handleDataLogsSocket from "./sockets/dataLogs.js";
-import handleDataPzemSocket from "./sockets/dataPzem.js"; // Import baru
 
 import deviceSensor from "./controllers/device/receiveSensor.js";
 import deviceOutput from "./controllers/device/output.js";
-import pzemController from "./controllers/device/pzemController.js";
 import sensorHistory from "./controllers/sensor/history.js";
 
 //import cronjob from "./functions/scheduler.js";
@@ -81,7 +79,6 @@ app.use("/files", filesMachine);
 //===============[Device Routes]=================//
 app.use("/api/device", deviceSensor);
 app.use("/api/device", deviceOutput);
-app.use("/api/device", pzemController);
 app.use("/api/sensor", sensorHistory);
 
 app.use((req, res) => {
@@ -99,7 +96,6 @@ wss.on("connection", (ws, req) => {
     "/dataOutput": handleDataOutputSocket,
     "/dataSensor": handleDataSensorSocket,
     "/logs": handleDataLogsSocket,
-    "/pzem": handleDataPzemSocket, // Route baru
   };
 
   const matchedRoute = Object.keys(routes).find((route) =>
