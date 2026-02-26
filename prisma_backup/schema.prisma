@@ -1,0 +1,308 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id               String                     @id @default(uuid())
+  email            String                     @unique
+  password         String
+  role             Role                       @default(USER)
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  carts            Cart[]
+  contact          Contact?
+  forgotPasswords  ForgotPassword[]
+  notifications    Notification[]
+  issuedProjects   Project[]                  @relation("IssuedProjects")
+  assignedProjects ProjectAssignment[]
+  projectNotes     ProjectProcessUpdateNote[] @relation("AuthorNotes")
+  requests         Request[]
+  sessions         Session[]
+}
+
+model Contact {
+  id        String   @id @default(uuid())
+  firstName String
+  lastName  String
+  email     String   @unique
+  phone     String
+  noreg     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  picture   String   @default("/default.png")
+  birthday  String?
+  banner    String   @default("/default.jpg")
+  account   Account  @relation(fields: [id], references: [id])
+}
+
+model Session {
+  id             String     @id @default(uuid())
+  token          String     @unique
+  accountId      String
+  expiredAt      DateTime
+  device         DeviceList @default(MOBILE)
+  ip             String
+  region         String
+  city           String
+  loc            String
+  org            String
+  timezone       String
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  lastAccessedAt DateTime   @default(now())
+  account        Account    @relation(fields: [accountId], references: [id])
+}
+
+model Output {
+  id        String        @id @default(uuid())
+  name      String        @unique
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  states    OutputState[]
+}
+
+model OutputState {
+  id          String     @id @default(uuid())
+  outputId    String
+  state       Boolean
+  mode        OutputMode
+  createdAt   DateTime   @default(now())
+  turnOffTime String?
+  turnOnTime  String?
+  output      Output     @relation(fields: [outputId], references: [id], onDelete: Cascade)
+}
+
+model ForgotPassword {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  accountId String
+  expiredAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  account   Account  @relation(fields: [accountId], references: [id])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  title     String
+  message   String
+  type      TypeNotification @default(BASIC)
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  accountId String
+  account   Account          @relation(fields: [accountId], references: [id])
+}
+
+model Category {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  description String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  products    Product[]
+}
+
+model Rack {
+  id        String    @id @default(uuid())
+  name      String
+  location  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  products  Product[] @relation("ProductToRack")
+}
+
+model Product {
+  id           String           @id @default(uuid())
+  name         String
+  description  String?
+  categoryId   String
+  stock        Int              @default(0)
+  price        Float
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  bomItems     BillOfMaterial[]
+  cartItems    CartItem[]
+  category     Category         @relation(fields: [categoryId], references: [id])
+  images       ProductImage[]
+  requestItems RequestItem[]
+  rack         Rack[]           @relation("ProductToRack")
+}
+
+model Cart {
+  id        String     @id @default(uuid())
+  accountId String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  account   Account    @relation(fields: [accountId], references: [id])
+  items     CartItem[]
+}
+
+model CartItem {
+  id        String   @id @default(uuid())
+  cartId    String
+  productId String
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cart      Cart     @relation(fields: [cartId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id])
+}
+
+model Request {
+  id          String           @id @default(uuid())
+  accountId   String
+  status      RequestStatus    @default(PENDING)
+  totalAmount Float
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  account     Account          @relation(fields: [accountId], references: [id])
+  histories   RequestHistory[]
+  items       RequestItem[]
+}
+
+model RequestItem {
+  id        String   @id @default(uuid())
+  requestId String
+  productId String
+  quantity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  product   Product  @relation(fields: [productId], references: [id])
+  request   Request  @relation(fields: [requestId], references: [id])
+}
+
+model RequestHistory {
+  id        String        @id @default(uuid())
+  requestId String
+  status    RequestStatus
+  changedAt DateTime      @default(now())
+  request   Request       @relation(fields: [requestId], references: [id])
+}
+
+model ProductImage {
+  id        String   @id @default(uuid())
+  productId String
+  path      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  product   Product  @relation(fields: [productId], references: [id])
+
+  @@index([productId])
+}
+
+model Project {
+  id          String              @id @default(uuid())
+  name        String
+  description String?
+  issuedById  String
+  status      ProjectStatus       @default(INITIATED)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  bomItems    BillOfMaterial[]
+  issuedBy    Account             @relation("IssuedProjects", fields: [issuedById], references: [id])
+  assignments ProjectAssignment[]
+  flowSteps   ProjectFlowStep[]   @relation("ProjectFlowSteps")
+}
+
+model ProjectAssignment {
+  id         String   @id @default(uuid())
+  projectId  String
+  accountId  String
+  assignedAt DateTime @default(now())
+  account    Account  @relation(fields: [accountId], references: [id])
+  project    Project  @relation(fields: [projectId], references: [id])
+}
+
+model ProjectFlowStep {
+  id          String                     @id @default(uuid())
+  projectId   String
+  name        String
+  order       Int
+  status      StepStatus                 @default(PENDING)
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime                   @default(now())
+  updatedAt   DateTime                   @updatedAt
+  project     Project                    @relation("ProjectFlowSteps", fields: [projectId], references: [id])
+  updateNotes ProjectProcessUpdateNote[] @relation("FlowStepNotes")
+
+  @@unique([projectId, order])
+}
+
+model BillOfMaterial {
+  id        String   @id @default(uuid())
+  projectId String
+  productId String
+  quantity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  product   Product  @relation(fields: [productId], references: [id])
+  project   Project  @relation(fields: [projectId], references: [id])
+}
+
+model ProjectProcessUpdateNote {
+  id         String          @id @default(uuid())
+  flowStepId String
+  authorId   String
+  content    String
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+  author     Account         @relation("AuthorNotes", fields: [authorId], references: [id])
+  flowStep   ProjectFlowStep @relation("FlowStepNotes", fields: [flowStepId], references: [id])
+}
+
+enum OutputMode {
+  MANUAL
+  AUTO_SUN
+  AUTO_DATETIME
+}
+
+enum Role {
+  USER
+  ADMIN
+  DOSEN
+  MAHASISWA
+  MAGANG
+}
+
+enum DeviceList {
+  MOBILE
+  TABLET
+  DESKTOP
+  UNKNOWN
+}
+
+enum TypeNotification {
+  BASIC
+  INFO
+  WARNING
+  ERROR
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+  CANCELLED
+}
+
+enum ProjectStatus {
+  INITIATED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum StepStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
