@@ -36,7 +36,7 @@ import handleDataPzemSocket from "./sockets/dataPzem.js";
 
 import deviceSensor from "./controllers/device/receiveSensor.js";
 import deviceOutput from "./controllers/device/output.js";
-import handleDataPzemSocket from "./sockets/dataPzem.js";
+import devicePzem from "./controllers/device/pzem.js";
 import sensorHistory from "./controllers/sensor/history.js";
 
 //import cronjob from "./functions/scheduler.js";
