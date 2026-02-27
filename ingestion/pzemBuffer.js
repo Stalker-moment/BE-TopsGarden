@@ -1,3 +1,10 @@
+import { prisma } from "../prisma/client.js";
+import { createLogger } from "../helper/logger.js";
+
+const buffer = [];
+let flushing = false;
+
+const MAX_BATCH = Number(process.env.PZEM_BATCH_MAX || 50);
 const FLUSH_INTERVAL_MS = Number(process.env.PZEM_BATCH_INTERVAL_MS || 2000);
 const log = createLogger("PzemBuffer");
 
