@@ -90,6 +90,44 @@ model OutputState {
   output      Output     @relation(fields: [outputId], references: [id], onDelete: Cascade)
 }
 
+// === Module Sensor Baru (PZEM-004T / PZEM-016 / PZEM-017) ===
+
+model PzemDevice {
+  id       String  @id @default(uuid())
+  name     String  @unique // e.g., "Panel Utama"
+  location String? // e.g., "Gudang"
+  isActive Boolean @default(true)
+
+  // Fitur Reset Energi Bulanan
+  shouldReset Boolean   @default(false) // Flag: Jika true, server minta alat reset energy
+  lastResetAt DateTime? // Waktu terakhir berhasil reset
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  logs PzemLog[]
+}
+
+model PzemLog {
+  id String @id @default(uuid())
+
+  deviceId String
+  device   PzemDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  // Metrics from PZEM
+  voltage   Float // (V)
+  current   Float // (A)
+  power     Float // (W) Active Power
+  energy    Float // (kWh) Cumulative Energy
+  frequency Float // (Hz)
+  pf        Float // Power Factor (0.0 - 1.0)
+
+  createdAt DateTime @default(now())
+
+  // Index for faster querying of dashboard charts (filtering by time)
+  @@index([deviceId, createdAt])
+}
+
 model ForgotPassword {
   id        String   @id @default(uuid())
   token     String   @unique
