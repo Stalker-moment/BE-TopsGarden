@@ -414,16 +414,20 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
             const avgVoltage = h.count > 0 ? parseFloat((h._voltageSum / h.count).toFixed(1)) : 0;
             let usageKwh = 0;
 
-            if (h._minEnergy !== null && h._maxEnergy !== null) {
-                if (h._maxEnergy >= h._minEnergy) {
-                    usageKwh = h._maxEnergy - h._minEnergy;
-                } else {
-                    usageKwh = h._maxEnergy; // reset occurred
+            // Coba kalkulasi delta kWh jika min & max energy valid dan selisihnya masuk akal (< 10 kWh dalam 1 jam)
+            if (h._minEnergy !== null && h._maxEnergy !== null && h._minEnergy > 0) {
+                const delta = h._maxEnergy - h._minEnergy;
+                if (delta >= 0 && delta < 10) {
+                    usageKwh = delta;
                 }
             }
-            // Fallback: estimasi dari rata-rata daya jika delta energy ~0 tapi daya ada
+
+            // Jika delta energy tidak valid (0 / minEnergy=0 / lonjakan anomali > 10 kWh),
+            // kalkulasi dari integrasi daya rata-rata (Power in Watts):
+            // usageKwh = (avgPower / 1000) * durationInHours
             if (usageKwh <= 0 && avgPower > 0) {
-                usageKwh = (avgPower / 1000) * (h.count / 30); // perkiraan durasi aktif
+                const activeDurationHours = Math.min(1.0, (h.count * 3) / 3600);
+                usageKwh = (avgPower / 1000) * (activeDurationHours > 0.05 ? activeDurationHours : 1.0);
             }
 
             usageKwh = parseFloat(usageKwh.toFixed(4));
@@ -439,6 +443,7 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
                 count: h.count,
             };
         });
+
 
         const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
         res.json({
