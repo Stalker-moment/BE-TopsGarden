@@ -347,11 +347,193 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
             plnRate: PLN_RATE,
             years: result,
         });
+/**
+ * 9b. Hourly kWh & Power Usage (24 Jam - Data Per-Jam di Hari Itu)
+ * GET /pzem/:id/hourly-usage?date=2026-07-04
+ */
+router.get("/pzem/:id/hourly-usage", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const targetDateStr = req.query.date ? String(req.query.date) : new Date().toISOString().slice(0, 10);
+        
+        const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
+        const startDate = new Date(yearStr, monthStr - 1, dayStr, 0, 0, 0, 0);
+        const endDate = new Date(yearStr, monthStr - 1, dayStr, 23, 59, 59, 999);
+
+        const logs = await prisma.pzemLog.findMany({
+            where: {
+                deviceId: id,
+                createdAt: { gte: startDate, lte: endDate },
+            },
+            orderBy: { createdAt: 'asc' },
+        });
+
+        // Group by hour 0..23
+        const hourMap = {};
+        for (let h = 0; h < 24; h++) {
+            const label = `${String(h).padStart(2, '0')}:00`;
+            hourMap[h] = {
+                hour: h,
+                label,
+                avgPower: 0,
+                maxPower: 0,
+                avgVoltage: 0,
+                usageKwh: 0,
+                count: 0,
+                _powerSum: 0,
+                _voltageSum: 0,
+                _minEnergy: null,
+                _maxEnergy: null,
+            };
+        }
+
+        for (const logItem of logs) {
+            const h = new Date(logItem.createdAt).getHours();
+            if (hourMap[h]) {
+                const item = hourMap[h];
+                item.count += 1;
+                item._powerSum += logItem.power;
+                item._voltageSum += logItem.voltage;
+                if (logItem.power > item.maxPower) item.maxPower = logItem.power;
+
+                if (item._minEnergy === null || logItem.energy < item._minEnergy) item._minEnergy = logItem.energy;
+                if (item._maxEnergy === null || logItem.energy > item._maxEnergy) item._maxEnergy = logItem.energy;
+            }
+        }
+
+        let totalKwh = 0;
+        const hours = Object.values(hourMap).map(h => {
+            const avgPower = h.count > 0 ? parseFloat((h._powerSum / h.count).toFixed(1)) : 0;
+            const avgVoltage = h.count > 0 ? parseFloat((h._voltageSum / h.count).toFixed(1)) : 0;
+            let usageKwh = 0;
+
+            if (h._minEnergy !== null && h._maxEnergy !== null) {
+                if (h._maxEnergy >= h._minEnergy) {
+                    usageKwh = h._maxEnergy - h._minEnergy;
+                } else {
+                    usageKwh = h._maxEnergy; // reset occurred
+                }
+            }
+            // Fallback: estimasi dari rata-rata daya jika delta energy ~0 tapi daya ada
+            if (usageKwh <= 0 && avgPower > 0) {
+                usageKwh = (avgPower / 1000) * (h.count / 30); // perkiraan durasi aktif
+            }
+
+            usageKwh = parseFloat(usageKwh.toFixed(4));
+            totalKwh += usageKwh;
+
+            return {
+                hour: h.hour,
+                label: h.label,
+                avgPower,
+                maxPower: parseFloat(h.maxPower.toFixed(1)),
+                avgVoltage,
+                usageKwh,
+                count: h.count,
+            };
+        });
+
+        const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
+        res.json({
+            date: targetDateStr,
+            totalKwh: parseFloat(totalKwh.toFixed(3)),
+            estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
+            plnRate: PLN_RATE,
+            hours,
+        });
     } catch (error) {
-        log.error("yearly-usage error", error.message);
+        log.error("hourly-usage error", error.message);
         res.status(500).json({ error: error.message });
     }
 });
+
+/**
+ * 9c. Minutely kWh & Power Usage (1 Jam - Data Per-Menit di Jam Itu)
+ * GET /pzem/:id/minutely-usage?date=2026-07-04&hour=14
+ */
+router.get("/pzem/:id/minutely-usage", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const now = new Date();
+        const targetDateStr = req.query.date ? String(req.query.date) : now.toISOString().slice(0, 10);
+        const targetHour = req.query.hour !== undefined ? Number(req.query.hour) : now.getHours();
+
+        const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
+        const startDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 0, 0, 0);
+        const endDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 59, 59, 999);
+
+        const logs = await prisma.pzemLog.findMany({
+            where: {
+                deviceId: id,
+                createdAt: { gte: startDate, lte: endDate },
+            },
+            orderBy: { createdAt: 'asc' },
+        });
+
+        // Group by minute 0..59
+        const minuteMap = {};
+        for (let m = 0; m < 60; m++) {
+            const label = `${String(targetHour).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+            minuteMap[m] = {
+                minute: m,
+                label,
+                avgPower: 0,
+                avgVoltage: 0,
+                avgCurrent: 0,
+                usageKwh: 0,
+                count: 0,
+                _powerSum: 0,
+                _voltageSum: 0,
+                _currentSum: 0,
+            };
+        }
+
+        for (const logItem of logs) {
+            const m = new Date(logItem.createdAt).getMinutes();
+            if (minuteMap[m]) {
+                const item = minuteMap[m];
+                item.count += 1;
+                item._powerSum += logItem.power;
+                item._voltageSum += logItem.voltage;
+                item._currentSum += logItem.current;
+            }
+        }
+
+        let totalKwh = 0;
+        const minutes = Object.values(minuteMap).map(m => {
+            const avgPower = m.count > 0 ? parseFloat((m._powerSum / m.count).toFixed(1)) : 0;
+            const avgVoltage = m.count > 0 ? parseFloat((m._voltageSum / m.count).toFixed(1)) : 0;
+            const avgCurrent = m.count > 0 ? parseFloat((m._currentSum / m.count).toFixed(2)) : 0;
+            const usageKwh = parseFloat(((avgPower / 1000) / 60).toFixed(5)); // Wh / 60 menit
+
+            totalKwh += usageKwh;
+
+            return {
+                minute: m.minute,
+                label: m.label,
+                avgPower,
+                avgVoltage,
+                avgCurrent,
+                usageKwh,
+                count: m.count,
+            };
+        });
+
+        const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
+        res.json({
+            date: targetDateStr,
+            hour: targetHour,
+            totalKwh: parseFloat(totalKwh.toFixed(4)),
+            estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
+            plnRate: PLN_RATE,
+            minutes,
+        });
+    } catch (error) {
+        log.error("minutely-usage error", error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 
 /**
  * 10. Power Outage Logs

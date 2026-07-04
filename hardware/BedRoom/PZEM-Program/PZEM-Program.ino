@@ -95,38 +95,117 @@ void drawDetailedBar(int row, int colStart, int totalWidth, float percentage) {
   lcd.print("]");
 }
 
-void sendDataToServer(float v, float a, float p, float e, float f, float pf) {
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    http.begin(serverUrl);
-    http.addHeader("Content-Type", "application/json");
+// --- OFFLINE QUEUE SYSTEM FOR PZEM TELEMETRY ---
+struct PzemDataRecord {
+  float v;
+  float a;
+  float p;
+  float e;
+  float f;
+  float pf;
+};
 
-    StaticJsonDocument<256> doc;
-    doc["deviceId"] = deviceId;
-    doc["voltage"]  = v;
-    doc["current"]  = a;
-    doc["power"]    = p;
-    doc["energy"]   = e;
-    doc["frequency"] = f;
-    doc["pf"]       = pf;
+#define MAX_OFFLINE_BUFFER 60 // Kapasitas antrean simpan offline (hingga 60 record)
+PzemDataRecord offlineBuffer[MAX_OFFLINE_BUFFER];
+int offlineBufferHead = 0;
+int offlineBufferTail = 0;
+int offlineBufferCount = 0;
 
-    String jsonStr;
-    serializeJson(doc, jsonStr);
-
-    int httpResponseCode = http.POST(jsonStr);
-
-    if (httpResponseCode > 0) {
-      String response = http.getString();
-      StaticJsonDocument<128> resDoc;
-      deserializeJson(resDoc, response);
-      if (String(resDoc["command"]) == "RESET_ENERGY") {
-        pzem.resetEnergy();
-        Serial.println("Energy Reset via API!");
-      }
-    }
-    http.end();
+void enqueueOfflineData(float v, float a, float p, float e, float f, float pf) {
+  if (offlineBufferCount < MAX_OFFLINE_BUFFER) {
+    offlineBuffer[offlineBufferTail] = {v, a, p, e, f, pf};
+    offlineBufferTail = (offlineBufferTail + 1) % MAX_OFFLINE_BUFFER;
+    offlineBufferCount++;
+    Serial.printf("[OFFLINE QUEUE] Server tidak terjangkau. Data disimpan di buffer ESP32 (%d/%d)\n", offlineBufferCount, MAX_OFFLINE_BUFFER);
+  } else {
+    // Buffer penuh -> menimpa data paling lama
+    offlineBuffer[offlineBufferTail] = {v, a, p, e, f, pf};
+    offlineBufferHead = (offlineBufferHead + 1) % MAX_OFFLINE_BUFFER;
+    offlineBufferTail = (offlineBufferTail + 1) % MAX_OFFLINE_BUFFER;
+    Serial.println("[OFFLINE QUEUE] Buffer penuh! Menimpa data terlama.");
   }
 }
+
+bool sendSingleRecord(float v, float a, float p, float e, float f, float pf) {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  HTTPClient http;
+  http.begin(serverUrl);
+  http.addHeader("Content-Type", "application/json");
+  http.setTimeout(2000); // 2 detik timeout
+
+  StaticJsonDocument<256> doc;
+  doc["deviceId"] = deviceId;
+  doc["voltage"]  = v;
+  doc["current"]  = a;
+  doc["power"]    = p;
+  doc["energy"]   = e;
+  doc["frequency"] = f;
+  doc["pf"]       = pf;
+
+  String jsonStr;
+  serializeJson(doc, jsonStr);
+
+  int httpResponseCode = http.POST(jsonStr);
+  bool success = false;
+
+  if (httpResponseCode >= 200 && httpResponseCode < 300) {
+    success = true;
+    String response = http.getString();
+    StaticJsonDocument<128> resDoc;
+    deserializeJson(resDoc, response);
+    if (String(resDoc["command"]) == "RESET_ENERGY") {
+      pzem.resetEnergy();
+      Serial.println("Energy Reset via API!");
+    }
+  } else {
+    Serial.printf("[HTTP ERROR] Failed to send PZEM data. Code: %d\n", httpResponseCode);
+  }
+  http.end();
+  return success;
+}
+
+void processOfflineQueue() {
+  if (offlineBufferCount == 0 || WiFi.status() != WL_CONNECTED) return;
+
+  Serial.printf("[OFFLINE QUEUE] Mengirim %d data offline yang tersimpan ke server...\n", offlineBufferCount);
+
+  int sentCount = 0;
+  while (offlineBufferCount > 0 && WiFi.status() == WL_CONNECTED) {
+    PzemDataRecord rec = offlineBuffer[offlineBufferHead];
+    bool ok = sendSingleRecord(rec.v, rec.a, rec.p, rec.e, rec.f, rec.pf);
+
+    if (ok) {
+      offlineBufferHead = (offlineBufferHead + 1) % MAX_OFFLINE_BUFFER;
+      offlineBufferCount--;
+      sentCount++;
+      delay(50); // Jeda singkat antar request
+    } else {
+      Serial.println("[OFFLINE QUEUE] Gagal mengirim data antrean. Koneksi terputus kembali.");
+      break;
+    }
+  }
+
+  if (sentCount > 0) {
+    Serial.printf("[OFFLINE QUEUE] Sukses mengirim %d data offline ke server. (Sisa antrean: %d)\n", sentCount, offlineBufferCount);
+  }
+}
+
+void sendDataToServer(float v, float a, float p, float e, float f, float pf) {
+  // 1. Jika terhubung & ada antrean data offline, flush data offline terlebih dahulu
+  if (WiFi.status() == WL_CONNECTED && offlineBufferCount > 0) {
+    processOfflineQueue();
+  }
+
+  // 2. Kirim data terkini
+  bool success = sendSingleRecord(v, a, p, e, f, pf);
+
+  // 3. Jika gagal kirim (koneksi terputus/server down), simpan di antrean offline
+  if (!success) {
+    enqueueOfflineData(v, a, p, e, f, pf);
+  }
+}
+
 
 void loop() {
   float voltage   = pzem.voltage();
@@ -136,8 +215,26 @@ void loop() {
   float frequency = pzem.frequency();
   float pf        = pzem.pf();
 
-  if (isnan(voltage)) {
-    lcd.setCursor(0, 0); lcd.print("--- SENSOR ERROR ---");
+  static float lastValidEnergy = 0.0;
+  if (!isnan(energy) && energy >= 0) {
+    lastValidEnergy = energy;
+  }
+
+  bool isError = isnan(voltage);
+
+  if (isError) {
+    voltage   = 0.0;
+    current   = 0.0;
+    power     = 0.0;
+    frequency = 0.0;
+    pf        = 0.0;
+    energy    = lastValidEnergy;
+
+    lcd.setCursor(0, 0); lcd.print("- SENSOR OFF / 0V  -");
+    lcd.setCursor(0, 1); lcd.print("V: 0.0V  | P: 0W    ");
+    lcd.setCursor(0, 2); lcd.print("E:"); printAt(2, 2, String(energy, 2) + "kWh", 8);
+    lcd.setCursor(10, 2); lcd.print("| OFF");
+    lcd.setCursor(0, 3); lcd.print("P[              ] 0%");
   } else {
     // BARIS 1: Tegangan & Arus
     lcd.setCursor(0, 0); lcd.write(0); // Ikon Volt
@@ -174,12 +271,13 @@ void loop() {
     snprintf(pctBuf, sizeof(pctBuf), "%3d%%", (int)percent);
     lcd.setCursor(16, 3);
     lcd.print(pctBuf);
-
-    // Kirim API secara non-blocking
-    if (millis() - lastSendTime > sendInterval) {
-      sendDataToServer(voltage, current, power, energy, frequency, pf);
-      lastSendTime = millis();
-    }
   }
+
+  // Kirim API secara non-blocking SELALU (bahkan saat 0V / sensor error / mati listrik)
+  if (millis() - lastSendTime > sendInterval) {
+    sendDataToServer(voltage, current, power, energy, frequency, pf);
+    lastSendTime = millis();
+  }
+
   delay(500); 
 }
