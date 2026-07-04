@@ -347,12 +347,19 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
             plnRate: PLN_RATE,
             years: result,
         });
+    } catch (error) {
+        log.error("yearly-usage error", error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 /**
  * 9b. Hourly kWh & Power Usage (24 Jam - Data Per-Jam di Hari Itu)
  * GET /pzem/:id/hourly-usage?date=2026-07-04
  */
 router.get("/pzem/:id/hourly-usage", async (req, res) => {
     try {
+
         const { id } = req.params;
         const targetDateStr = req.query.date ? String(req.query.date) : new Date().toISOString().slice(0, 10);
         
