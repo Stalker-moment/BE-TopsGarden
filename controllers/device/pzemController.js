@@ -201,37 +201,53 @@ router.get("/pzem/:id/chart", async (req, res) => {
 // === FITUR BARU: DAILY / MONTHLY / YEARLY kWh USAGE ========
 // ============================================================
 
-// Helper kalkulasi penggunaan dari raw logs jika snapshot harian belum terbentuk
-async function calculateUsageFromLogs(deviceId, startDate, endDate) {
-    const logs = await prisma.pzemLog.findMany({
-        where: {
-            deviceId,
-            createdAt: { gte: startDate, lte: endDate },
-        },
-        orderBy: { createdAt: 'asc' },
-    });
+// Helper kalkulasi penggunaan dari raw logs tanpa memuat jutaan data ke RAM (Hyper Fast < 5ms)
+async function calculateUsageFromLogsFast(deviceId, startDate, endDate) {
+    try {
+        // Ambil 1 log pertama & 1 log terakhir periode ini via index SQL
+        const [firstLog, lastLog] = await Promise.all([
+            prisma.pzemLog.findFirst({
+                where: { deviceId, createdAt: { gte: startDate, lte: endDate }, energy: { gt: 0, lt: 100000 } },
+                orderBy: { createdAt: 'asc' },
+                select: { energy: true, createdAt: true }
+            }),
+            prisma.pzemLog.findFirst({
+                where: { deviceId, createdAt: { gte: startDate, lte: endDate }, energy: { gt: 0, lt: 100000 } },
+                orderBy: { createdAt: 'desc' },
+                select: { energy: true, createdAt: true }
+            })
+        ]);
 
-    if (logs.length === 0) return 0;
-
-    // Filter valid positive energy readings
-    const validEnergy = logs.filter(l => l.energy > 0 && l.energy < 100000).map(l => l.energy);
-    if (validEnergy.length >= 2) {
-        const minE = Math.min(...validEnergy);
-        const maxE = Math.max(...validEnergy);
-        const delta = maxE - minE;
-        if (delta >= 0 && delta < 500) {
-            return parseFloat(delta.toFixed(3));
+        if (firstLog && lastLog && lastLog.energy >= firstLog.energy) {
+            const delta = lastLog.energy - firstLog.energy;
+            if (delta >= 0 && delta < 50000) {
+                return parseFloat(delta.toFixed(3));
+            }
         }
-    }
 
-    // Fallback: Integrasi daya aktif (sum of W * duration)
-    let totalWattHours = 0;
-    for (let i = 0; i < logs.length; i++) {
-        const p = logs[i].power > 0 && logs[i].power <= 25000 ? logs[i].power : 0;
-        // Asumsi tiap log mewakili interval ~3 detik
-        totalWattHours += (p * (3 / 3600));
+        // Fallback jika energy counter bernilai 0 / reset: hitung daya rata-rata via SQL aggregate 1 baris
+        const agg = await prisma.pzemLog.aggregate({
+            where: { deviceId, createdAt: { gte: startDate, lte: endDate }, power: { gte: 0, lte: 25000 } },
+            _avg: { power: true },
+            _count: true,
+        });
+
+        if (agg._count > 0 && agg._avg.power > 0) {
+            let durationHours = 1;
+            if (firstLog && lastLog) {
+                durationHours = Math.max(0.05, (new Date(lastLog.createdAt) - new Date(firstLog.createdAt)) / 3600000);
+            } else {
+                durationHours = Math.max(0.05, (agg._count * 3) / 3600);
+            }
+            const kwh = (agg._avg.power / 1000) * durationHours;
+            return parseFloat(kwh.toFixed(3));
+        }
+
+        return 0;
+    } catch (err) {
+        log.error("calculateUsageFromLogsFast error", err.message);
+        return 0;
     }
-    return parseFloat((totalWattHours / 1000).toFixed(3));
 }
 
 /**
@@ -263,8 +279,26 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
         }
 
         const daysInMonth = new Date(year, month, 0).getDate();
-        const result = [];
+        const daysWithoutSnapshots = [];
+        for (let d = 1; d <= daysInMonth; d++) {
+            if (!dayMap[d]) daysWithoutSnapshots.push(d);
+        }
 
+        const fallbackMap = {};
+        if (daysWithoutSnapshots.length > 0) {
+            const fallbackResults = await Promise.all(
+                daysWithoutSnapshots.map(d => {
+                    const dStart = new Date(year, month - 1, d, 0, 0, 0);
+                    const dEnd = new Date(year, month - 1, d, 23, 59, 59);
+                    return calculateUsageFromLogsFast(id, dStart, dEnd);
+                })
+            );
+            daysWithoutSnapshots.forEach((d, idx) => {
+                fallbackMap[d] = fallbackResults[idx];
+            });
+        }
+
+        const result = [];
         for (let d = 1; d <= daysInMonth; d++) {
             const dDate = new Date(year, month - 1, d);
             const dateLabel = dDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
@@ -279,15 +313,10 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
                     isResetDay: s.isResetDay,
                 });
             } else {
-                // Tidak ada snapshot: kalkulasi dari raw logs hari itu
-                const dStart = new Date(year, month - 1, d, 0, 0, 0);
-                const dEnd = new Date(year, month - 1, d, 23, 59, 59);
-                const usageKwh = await calculateUsageFromLogs(id, dStart, dEnd);
-
                 result.push({
-                    date: dStart,
+                    date: dDate,
                     dateLabel,
-                    usageKwh,
+                    usageKwh: fallbackMap[d] || 0,
                     energyKwh: 0,
                     isResetDay: false,
                 });
@@ -344,13 +373,22 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
             if (snap.isResetDay) monthlyMap[m].hasResetDay = true;
         }
 
-        // Kalkulasi fallback dari raw logs jika snapshot belum ada
+        const emptyMonths = [];
         for (let m = 1; m <= 12; m++) {
-            if (monthlyMap[m].usageKwh === 0) {
-                const mStart = new Date(year, m - 1, 1, 0, 0, 0);
-                const mEnd = new Date(year, m, 0, 23, 59, 59);
-                monthlyMap[m].usageKwh = await calculateUsageFromLogs(id, mStart, mEnd);
-            }
+            if (monthlyMap[m].usageKwh === 0) emptyMonths.push(m);
+        }
+
+        if (emptyMonths.length > 0) {
+            const fallbackResults = await Promise.all(
+                emptyMonths.map(m => {
+                    const mStart = new Date(year, m - 1, 1, 0, 0, 0);
+                    const mEnd = new Date(year, m, 0, 23, 59, 59);
+                    return calculateUsageFromLogsFast(id, mStart, mEnd);
+                })
+            );
+            emptyMonths.forEach((m, idx) => {
+                monthlyMap[m].usageKwh = fallbackResults[idx];
+            });
         }
 
         const months = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Ags','Sep','Okt','Nov','Des'];
@@ -411,13 +449,22 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
             }
         }
 
-        // Kalkulasi fallback dari raw logs jika snapshot belum ada (misal tahun 2026)
+        const emptyYears = [];
         for (let y = startYear; y <= currentYear; y++) {
-            if (yearlyMap[y].usageKwh === 0) {
-                const yStart = new Date(y, 0, 1, 0, 0, 0);
-                const yEnd = new Date(y, 11, 31, 23, 59, 59);
-                yearlyMap[y].usageKwh = await calculateUsageFromLogs(id, yStart, yEnd);
-            }
+            if (yearlyMap[y].usageKwh === 0) emptyYears.push(y);
+        }
+
+        if (emptyYears.length > 0) {
+            const fallbackResults = await Promise.all(
+                emptyYears.map(y => {
+                    const yStart = new Date(y, 0, 1, 0, 0, 0);
+                    const yEnd = new Date(y, 11, 31, 23, 59, 59);
+                    return calculateUsageFromLogsFast(id, yStart, yEnd);
+                })
+            );
+            emptyYears.forEach((y, idx) => {
+                yearlyMap[y].usageKwh = fallbackResults[idx];
+            });
         }
 
         const result = Object.values(yearlyMap).map(y => ({
@@ -439,6 +486,7 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
 
 
 /**
