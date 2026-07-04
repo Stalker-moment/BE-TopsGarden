@@ -201,11 +201,42 @@ router.get("/pzem/:id/chart", async (req, res) => {
 // === FITUR BARU: DAILY / MONTHLY / YEARLY kWh USAGE ========
 // ============================================================
 
+// Helper kalkulasi penggunaan dari raw logs jika snapshot harian belum terbentuk
+async function calculateUsageFromLogs(deviceId, startDate, endDate) {
+    const logs = await prisma.pzemLog.findMany({
+        where: {
+            deviceId,
+            createdAt: { gte: startDate, lte: endDate },
+        },
+        orderBy: { createdAt: 'asc' },
+    });
+
+    if (logs.length === 0) return 0;
+
+    // Filter valid positive energy readings
+    const validEnergy = logs.filter(l => l.energy > 0 && l.energy < 100000).map(l => l.energy);
+    if (validEnergy.length >= 2) {
+        const minE = Math.min(...validEnergy);
+        const maxE = Math.max(...validEnergy);
+        const delta = maxE - minE;
+        if (delta >= 0 && delta < 500) {
+            return parseFloat(delta.toFixed(3));
+        }
+    }
+
+    // Fallback: Integrasi daya aktif (sum of W * duration)
+    let totalWattHours = 0;
+    for (let i = 0; i < logs.length; i++) {
+        const p = logs[i].power > 0 && logs[i].power <= 25000 ? logs[i].power : 0;
+        // Asumsi tiap log mewakili interval ~3 detik
+        totalWattHours += (p * (3 / 3600));
+    }
+    return parseFloat((totalWattHours / 1000).toFixed(3));
+}
+
 /**
  * 7. Daily kWh Usage
  * GET /pzem/:id/daily-usage?year=2026&month=7
- * Mengembalikan array konsumsi harian berdasarkan snapshot midnight.
- * Jika bulan/tahun tidak diberikan, default bulan & tahun saat ini.
  */
 router.get("/pzem/:id/daily-usage", async (req, res) => {
     try {
@@ -214,9 +245,8 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
         const year = Number(req.query.year) || now.getFullYear();
         const month = Number(req.query.month) || (now.getMonth() + 1); // 1-based
 
-        // Rentang: awal bulan s/d akhir bulan
-        const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0); // local midnight
-        const endDate = new Date(year, month, 0, 23, 59, 59, 999); // last day of month
+        const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0);
+        const endDate = new Date(year, month, 0, 23, 59, 59, 999);
 
         const snapshots = await prisma.pzemDailySnapshot.findMany({
             where: {
@@ -226,26 +256,52 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
             orderBy: { date: 'asc' },
         });
 
-        // Kalau belum ada snapshot (device baru atau bulan pertama), 
-        // coba kalkulasi dari raw logs (fallback)
-        const result = snapshots.map(s => ({
-            date: s.date,
-            dateLabel: new Date(s.date).toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }),
-            usageKwh: s.deltaKwh ?? 0,
-            energyKwh: s.energyKwh,
-            isResetDay: s.isResetDay,
-        }));
+        const dayMap = {};
+        for (const s of snapshots) {
+            const dayNum = new Date(s.date).getDate();
+            dayMap[dayNum] = s;
+        }
 
-        // Hitung total bulan ini & estimasi biaya
+        const daysInMonth = new Date(year, month, 0).getDate();
+        const result = [];
+
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dDate = new Date(year, month - 1, d);
+            const dateLabel = dDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
+
+            if (dayMap[d]) {
+                const s = dayMap[d];
+                result.push({
+                    date: s.date,
+                    dateLabel,
+                    usageKwh: s.deltaKwh ?? 0,
+                    energyKwh: s.energyKwh,
+                    isResetDay: s.isResetDay,
+                });
+            } else {
+                // Tidak ada snapshot: kalkulasi dari raw logs hari itu
+                const dStart = new Date(year, month - 1, d, 0, 0, 0);
+                const dEnd = new Date(year, month - 1, d, 23, 59, 59);
+                const usageKwh = await calculateUsageFromLogs(id, dStart, dEnd);
+
+                result.push({
+                    date: dStart,
+                    dateLabel,
+                    usageKwh,
+                    energyKwh: 0,
+                    isResetDay: false,
+                });
+            }
+        }
+
         const totalKwh = result.reduce((sum, d) => sum + (d.usageKwh || 0), 0);
         const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
-        const estimatedCost = totalKwh * PLN_RATE;
 
         res.json({
             year,
             month,
             totalKwh: parseFloat(totalKwh.toFixed(3)),
-            estimatedCost: parseFloat(estimatedCost.toFixed(0)),
+            estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
             plnRate: PLN_RATE,
             days: result,
         });
@@ -258,15 +314,14 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
 /**
  * 8. Monthly kWh Usage
  * GET /pzem/:id/monthly-usage?year=2026
- * Mengembalikan array konsumsi per bulan (12 bulan) dalam 1 tahun.
  */
 router.get("/pzem/:id/monthly-usage", async (req, res) => {
     try {
         const { id } = req.params;
         const year = Number(req.query.year) || new Date().getFullYear();
 
-        const startDate = new Date(year, 0, 1);    // Jan 1
-        const endDate = new Date(year, 11, 31, 23, 59, 59); // Dec 31
+        const startDate = new Date(year, 0, 1);
+        const endDate = new Date(year, 11, 31, 23, 59, 59);
 
         const snapshots = await prisma.pzemDailySnapshot.findMany({
             where: {
@@ -277,17 +332,25 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
             orderBy: { date: 'asc' },
         });
 
-        // Aggregate per bulan
         const monthlyMap = {};
         for (let m = 1; m <= 12; m++) {
             monthlyMap[m] = { month: m, usageKwh: 0, hasResetDay: false, daysCount: 0 };
         }
 
         for (const snap of snapshots) {
-            const m = new Date(snap.date).getMonth() + 1; // 1-based
+            const m = new Date(snap.date).getMonth() + 1;
             monthlyMap[m].usageKwh += snap.deltaKwh || 0;
             monthlyMap[m].daysCount += 1;
             if (snap.isResetDay) monthlyMap[m].hasResetDay = true;
+        }
+
+        // Kalkulasi fallback dari raw logs jika snapshot belum ada
+        for (let m = 1; m <= 12; m++) {
+            if (monthlyMap[m].usageKwh === 0) {
+                const mStart = new Date(year, m - 1, 1, 0, 0, 0);
+                const mEnd = new Date(year, m, 0, 23, 59, 59);
+                monthlyMap[m].usageKwh = await calculateUsageFromLogs(id, mStart, mEnd);
+            }
         }
 
         const months = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Ags','Sep','Okt','Nov','Des'];
@@ -335,7 +398,6 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
             orderBy: { date: 'asc' },
         });
 
-        // Aggregate per tahun
         const yearlyMap = {};
         for (let y = startYear; y <= currentYear; y++) {
             yearlyMap[y] = { year: y, usageKwh: 0, hasResetDay: false };
@@ -349,14 +411,26 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
             }
         }
 
+        // Kalkulasi fallback dari raw logs jika snapshot belum ada (misal tahun 2026)
+        for (let y = startYear; y <= currentYear; y++) {
+            if (yearlyMap[y].usageKwh === 0) {
+                const yStart = new Date(y, 0, 1, 0, 0, 0);
+                const yEnd = new Date(y, 11, 31, 23, 59, 59);
+                yearlyMap[y].usageKwh = await calculateUsageFromLogs(id, yStart, yEnd);
+            }
+        }
+
         const result = Object.values(yearlyMap).map(y => ({
             ...y,
             usageKwh: parseFloat(y.usageKwh.toFixed(3)),
         }));
 
+        const totalKwh = result.reduce((sum, y) => sum + y.usageKwh, 0);
         const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
 
         res.json({
+            totalKwh: parseFloat(totalKwh.toFixed(3)),
+            estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
             plnRate: PLN_RATE,
             years: result,
         });
@@ -365,6 +439,7 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
 
 /**
  * 9b. Hourly kWh & Power Usage (24 Jam - Data Per-Jam di Hari Itu)
