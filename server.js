@@ -37,6 +37,7 @@ import handleDataPzemSocket from "./sockets/dataPzem.js";
 import deviceSensor from "./controllers/device/receiveSensor.js";
 import deviceOutput from "./controllers/device/output.js";
 import devicePzem from "./controllers/device/pzemController.js";
+import deviceServerBattery from "./controllers/device/serverBatteryController.js";
 import sensorHistory from "./controllers/sensor/history.js";
 
 //import cronjob from "./functions/scheduler.js";
@@ -82,6 +83,7 @@ app.use("/files", filesMachine);
 app.use("/api/device", deviceSensor);
 app.use("/api/device", deviceOutput);
 app.use("/api/device", devicePzem);
+app.use("/api/device", deviceServerBattery);
 app.use("/api/sensor", sensorHistory);
 
 app.use((req, res) => {

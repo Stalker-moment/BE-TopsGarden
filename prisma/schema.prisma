@@ -105,7 +105,9 @@ model PzemDevice {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  logs PzemLog[]
+  logs          PzemLog[]
+  dailySnapshots PzemDailySnapshot[]
+  outageLogs    PowerOutageLog[]
 }
 
 model PzemLog {
@@ -126,6 +128,53 @@ model PzemLog {
 
   // Index for faster querying of dashboard charts (filtering by time)
   @@index([deviceId, createdAt])
+}
+
+// === Snapshot Energi Harian (untuk kalkulasi delta kWh) ===
+// Dibuat otomatis oleh cron setiap tengah malam
+model PzemDailySnapshot {
+  id       String @id @default(uuid())
+
+  deviceId String
+  device   PzemDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  // Nilai kumulatif energy dari PZEM saat snapshot diambil (pukul 00:00)
+  energyKwh Float
+
+  // Konsumsi harian hasil kalkulasi (snapshot hari ini - snapshot kemarin)
+  // Jika null berarti belum bisa dihitung (hari pertama / data tidak ada)
+  deltaKwh  Float?
+
+  // Flag: apakah hari ini ada reset counter kWh di alat
+  // (terdeteksi jika energyKwh hari ini < energyKwh kemarin)
+  isResetDay Boolean @default(false)
+
+  // Tanggal snapshot (date only, tanpa time, untuk indexing)
+  date     DateTime // e.g., 2026-07-04T00:00:00Z
+
+  createdAt DateTime @default(now())
+
+  @@unique([deviceId, date])
+  @@index([deviceId, date])
+}
+
+// === Log Mati Listrik ===
+model PowerOutageLog {
+  id       String @id @default(uuid())
+
+  deviceId String
+  device   PzemDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  startedAt  DateTime  // Kapan tegangan mulai hilang
+  endedAt    DateTime? // Kapan tegangan kembali normal (null = masih berlangsung)
+  durationSec Int?     // Durasi dalam detik (diisi saat endedAt terisi)
+
+  // Tegangan terakhir sebelum mati (untuk referensi)
+  lastVoltage Float @default(0)
+
+  createdAt DateTime @default(now())
+
+  @@index([deviceId, startedAt])
 }
 
 model ForgotPassword {
