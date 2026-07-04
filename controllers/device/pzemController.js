@@ -15,17 +15,30 @@ router.post("/pzem/data", async (req, res) => {
         // 1. Basic Validation
         if (!deviceId) return res.status(400).json({ error: "Device ID required" });
 
+        let safeV = Number(voltage) || 0;
+        let safeA = Number(current) || 0;
+        let safeP = Number(power) || 0;
+        let safeE = Number(energy) || 0;
+        let safeF = Number(frequency) || 0;
+        let safePf = Number(pf) || 0;
+
+        if (isNaN(safeV) || safeV < 0 || safeV > 350) safeV = 0;
+        if (isNaN(safeA) || safeA < 0 || safeA > 120) safeA = 0;
+        if (isNaN(safeP) || safeP < 0 || safeP > 25000) safeP = 0;
+        if (isNaN(safeE) || safeE < 0 || safeE > 100000) safeE = 0;
+
         // 2. Insert Log to Buffer (async)
         addPzemLog({
             deviceId,
-            voltage: Number(voltage),
-            current: Number(current),
-            power: Number(power),
-            energy: Number(energy),
-            frequency: Number(frequency),
-            pf: Number(pf),
+            voltage: safeV,
+            current: safeA,
+            power: safeP,
+            energy: safeE,
+            frequency: safeF,
+            pf: safePf,
             createdAt: new Date()
         });
+
 
         // 3. Logic Reset Energy
         const device = await prisma.pzemDevice.findUnique({
@@ -395,18 +408,30 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
         }
 
         for (const logItem of logs) {
+            let p = logItem.power;
+            let v = logItem.voltage;
+            let e = logItem.energy;
+
+            // Filter out garbage / noise readings (> 25000 W, > 350 V, < 0)
+            if (isNaN(p) || p < 0 || p > 25000) p = 0;
+            if (isNaN(v) || v < 0 || v > 350) v = 0;
+            if (isNaN(e) || e < 0 || e > 100000) e = 0;
+
             const h = new Date(logItem.createdAt).getHours();
             if (hourMap[h]) {
                 const item = hourMap[h];
                 item.count += 1;
-                item._powerSum += logItem.power;
-                item._voltageSum += logItem.voltage;
-                if (logItem.power > item.maxPower) item.maxPower = logItem.power;
+                item._powerSum += p;
+                item._voltageSum += v;
+                if (p > item.maxPower) item.maxPower = p;
 
-                if (item._minEnergy === null || logItem.energy < item._minEnergy) item._minEnergy = logItem.energy;
-                if (item._maxEnergy === null || logItem.energy > item._maxEnergy) item._maxEnergy = logItem.energy;
+                if (e > 0) {
+                    if (item._minEnergy === null || e < item._minEnergy) item._minEnergy = e;
+                    if (item._maxEnergy === null || e > item._maxEnergy) item._maxEnergy = e;
+                }
             }
         }
+
 
         let totalKwh = 0;
         const hours = Object.values(hourMap).map(h => {
@@ -501,15 +526,25 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
         }
 
         for (const logItem of logs) {
+            let p = logItem.power;
+            let v = logItem.voltage;
+            let a = logItem.current;
+
+            // Filter data sampah / noise dari sensor (> 25000 W, > 350 V, > 120 A, < 0)
+            if (isNaN(p) || p < 0 || p > 25000) p = 0;
+            if (isNaN(v) || v < 0 || v > 350) v = 0;
+            if (isNaN(a) || a < 0 || a > 120) a = 0;
+
             const m = new Date(logItem.createdAt).getMinutes();
             if (minuteMap[m]) {
                 const item = minuteMap[m];
                 item.count += 1;
-                item._powerSum += logItem.power;
-                item._voltageSum += logItem.voltage;
-                item._currentSum += logItem.current;
+                item._powerSum += p;
+                item._voltageSum += v;
+                item._currentSum += a;
             }
         }
+
 
         let totalKwh = 0;
         const minutes = Object.values(minuteMap).map(m => {
