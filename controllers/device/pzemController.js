@@ -254,6 +254,16 @@ async function calculateDailyMetricsFast(deviceId, startDate, endDate) {
  * 7. Daily kWh Usage
  * GET /pzem/:id/daily-usage?year=2026&month=7
  */
+// Convert UTC date to 'YYYY-MM-DD' in Asia/Jakarta timezone
+const formatDateWIB = (date) => {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    }).format(new Date(date));
+};
+
 router.get("/pzem/:id/daily-usage", async (req, res) => {
     try {
         const { id } = req.params;
@@ -262,7 +272,8 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
         const month = Number(req.query.month) || (now.getMonth() + 1); // 1-based
 
         const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0);
-        const endDate = new Date(year, month, 0, 23, 59, 59, 999);
+        // Load up to the 1st of the next month to get the next day's snapshot for the last day of this month
+        const endDate = new Date(year, month, 1, 23, 59, 59, 999);
 
         const snapshots = await prisma.pzemDailySnapshot.findMany({
             where: {
@@ -274,8 +285,17 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
 
         const dayMap = {};
         for (const s of snapshots) {
-            const dayNum = new Date(s.date).getDate();
-            dayMap[dayNum] = s;
+            const dateStr = formatDateWIB(s.date);
+            const [y, m, d] = dateStr.split('-').map(Number);
+            
+            // The snapshot on date D (start of day D) contains the delta for day D-1
+            const targetDate = new Date(y, m - 1, d);
+            targetDate.setDate(targetDate.getDate() - 1);
+            
+            if (targetDate.getFullYear() === year && (targetDate.getMonth() + 1) === month) {
+                const targetDayNum = targetDate.getDate();
+                dayMap[targetDayNum] = s;
+            }
         }
 
         const daysInMonth = new Date(year, month, 0).getDate();
@@ -334,7 +354,8 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
         const year = Number(req.query.year) || new Date().getFullYear();
 
         const startDate = new Date(year, 0, 1);
-        const endDate = new Date(year, 11, 31, 23, 59, 59);
+        // Extend to Jan 1st of the next year
+        const endDate = new Date(year + 1, 0, 1, 23, 59, 59);
 
         const snapshots = await prisma.pzemDailySnapshot.findMany({
             where: {
@@ -351,10 +372,17 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
         }
 
         for (const snap of snapshots) {
-            const m = new Date(snap.date).getMonth() + 1;
-            monthlyMap[m].usageKwh += snap.deltaKwh || 0;
-            monthlyMap[m].daysCount += 1;
-            if (snap.isResetDay) monthlyMap[m].hasResetDay = true;
+            const dateStr = formatDateWIB(snap.date);
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const targetDate = new Date(y, m - 1, d);
+            targetDate.setDate(targetDate.getDate() - 1);
+            
+            if (targetDate.getFullYear() === year) {
+                const targetMonthNum = targetDate.getMonth() + 1;
+                monthlyMap[targetMonthNum].usageKwh += snap.deltaKwh || 0;
+                monthlyMap[targetMonthNum].daysCount += 1;
+                if (snap.isResetDay) monthlyMap[targetMonthNum].hasResetDay = true;
+            }
         }
 
         const emptyMonths = [];
@@ -410,7 +438,8 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
         const startYear = currentYear - 4; // 5 tahun terakhir
 
         const startDate = new Date(startYear, 0, 1);
-        const endDate = new Date(currentYear, 11, 31, 23, 59, 59);
+        // Extend to Jan 1st of the next year of currentYear
+        const endDate = new Date(currentYear + 1, 0, 1, 23, 59, 59);
 
         const snapshots = await prisma.pzemDailySnapshot.findMany({
             where: {
@@ -427,10 +456,15 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
         }
 
         for (const snap of snapshots) {
-            const y = new Date(snap.date).getFullYear();
-            if (yearlyMap[y]) {
-                yearlyMap[y].usageKwh += snap.deltaKwh || 0;
-                if (snap.isResetDay) yearlyMap[y].hasResetDay = true;
+            const dateStr = formatDateWIB(snap.date);
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const targetDate = new Date(y, m - 1, d);
+            targetDate.setDate(targetDate.getDate() - 1);
+            
+            const targetYear = targetDate.getFullYear();
+            if (yearlyMap[targetYear]) {
+                yearlyMap[targetYear].usageKwh += snap.deltaKwh || 0;
+                if (snap.isResetDay) yearlyMap[targetYear].hasResetDay = true;
             }
         }
 
