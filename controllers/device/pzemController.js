@@ -385,6 +385,15 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
             }
         }
 
+        const allMonths = Array.from({ length: 12 }, (_, i) => i + 1);
+        const monthlyMetrics = await Promise.all(
+            allMonths.map(async m => {
+                const mStart = new Date(year, m - 1, 1, 0, 0, 0);
+                const mEnd = new Date(year, m, 0, 23, 59, 59);
+                return calculateDailyMetricsFast(id, mStart, mEnd);
+            })
+        );
+
         const emptyMonths = [];
         for (let m = 1; m <= 12; m++) {
             if (monthlyMap[m].usageKwh === 0) emptyMonths.push(m);
@@ -405,11 +414,16 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
         }
 
         const months = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Ags','Sep','Okt','Nov','Des'];
-        const result = Object.values(monthlyMap).map(m => ({
-            ...m,
-            usageKwh: parseFloat(m.usageKwh.toFixed(3)),
-            label: months[m.month - 1],
-        }));
+        const result = Object.values(monthlyMap).map(m => {
+            const metrics = monthlyMetrics[m.month - 1] || { avgVoltage: 0, avgCurrent: 0 };
+            return {
+                ...m,
+                usageKwh: parseFloat(m.usageKwh.toFixed(3)),
+                label: months[m.month - 1],
+                avgVoltage: metrics.avgVoltage,
+                avgCurrent: metrics.avgCurrent,
+            };
+        });
 
         const totalKwh = result.reduce((sum, m) => sum + m.usageKwh, 0);
         const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
@@ -468,6 +482,15 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
             }
         }
 
+        const yearsArray = Array.from({ length: currentYear - startYear + 1 }, (_, i) => startYear + i);
+        const yearlyMetrics = await Promise.all(
+            yearsArray.map(async y => {
+                const yStart = new Date(y, 0, 1, 0, 0, 0);
+                const yEnd = new Date(y, 11, 31, 23, 59, 59);
+                return calculateDailyMetricsFast(id, yStart, yEnd);
+            })
+        );
+
         const emptyYears = [];
         for (let y = startYear; y <= currentYear; y++) {
             if (yearlyMap[y].usageKwh === 0) emptyYears.push(y);
@@ -487,10 +510,15 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
             });
         }
 
-        const result = Object.values(yearlyMap).map(y => ({
-            ...y,
-            usageKwh: parseFloat(y.usageKwh.toFixed(3)),
-        }));
+        const result = Object.values(yearlyMap).map((y, idx) => {
+            const metrics = yearlyMetrics[idx] || { avgVoltage: 0, avgCurrent: 0 };
+            return {
+                ...y,
+                usageKwh: parseFloat(y.usageKwh.toFixed(3)),
+                avgVoltage: metrics.avgVoltage,
+                avgCurrent: metrics.avgCurrent,
+            };
+        });
 
         const totalKwh = result.reduce((sum, y) => sum + y.usageKwh, 0);
         const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
