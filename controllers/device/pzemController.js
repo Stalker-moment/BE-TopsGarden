@@ -250,6 +250,64 @@ async function calculateDailyMetricsFast(deviceId, startDate, endDate) {
     }
 }
 
+// Helper to calculate total consumption from raw logs for days that missed midnight snapshots
+async function getMissingUsageForMonth(deviceId, year, month, snapshotDaysSet) {
+    const today = new Date();
+    const isCurrentMonth = (year === today.getFullYear() && month === (today.getMonth() + 1));
+    
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const endDay = isCurrentMonth ? (today.getDate() - 1) : daysInMonth;
+    
+    if (endDay <= 0) return 0;
+    
+    // Find contiguous blocks of missing days
+    const missingBlocks = [];
+    let currentBlock = null;
+    
+    for (let d = 1; d <= endDay; d++) {
+        const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+        const hasSnapshot = snapshotDaysSet.has(dateStr);
+        
+        if (!hasSnapshot) {
+            if (!currentBlock) {
+                currentBlock = { start: d, end: d };
+            } else {
+                currentBlock.end = d;
+            }
+        } else {
+            if (currentBlock) {
+                missingBlocks.push(currentBlock);
+                currentBlock = null;
+            }
+        }
+    }
+    if (currentBlock) {
+        missingBlocks.push(currentBlock);
+    }
+    
+    if (missingBlocks.length === 0) return 0;
+    
+    // Fetch usage for each block in parallel
+    const blockResults = await Promise.all(
+        missingBlocks.map(async block => {
+            const start = new Date(year, month - 1, block.start, 0, 0, 0);
+            const end = new Date(year, month - 1, block.end, 23, 59, 59);
+            const metrics = await calculateDailyMetricsFast(deviceId, start, end);
+            return metrics.usageKwh;
+        })
+    );
+    
+    return blockResults.reduce((sum, val) => sum + val, 0);
+}
+
+async function getMissingUsageForYear(deviceId, year, snapshotDaysSet) {
+    const months = Array.from({ length: 12 }, (_, i) => i + 1);
+    const results = await Promise.all(
+        months.map(m => getMissingUsageForMonth(deviceId, year, m, snapshotDaysSet))
+    );
+    return results.reduce((sum, val) => sum + val, 0);
+}
+
 /**
  * 7. Daily kWh Usage
  * GET /pzem/:id/daily-usage?year=2026&month=7
@@ -366,6 +424,7 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
             orderBy: { date: 'asc' },
         });
 
+        const snapshotDaysSet = new Set();
         const monthlyMap = {};
         for (let m = 1; m <= 12; m++) {
             monthlyMap[m] = { month: m, usageKwh: 0, hasResetDay: false, daysCount: 0 };
@@ -382,35 +441,27 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
                 monthlyMap[targetMonthNum].usageKwh += snap.deltaKwh || 0;
                 monthlyMap[targetMonthNum].daysCount += 1;
                 if (snap.isResetDay) monthlyMap[targetMonthNum].hasResetDay = true;
+                
+                snapshotDaysSet.add(formatDateWIB(targetDate));
             }
         }
 
         const allMonths = Array.from({ length: 12 }, (_, i) => i + 1);
-        const monthlyMetrics = await Promise.all(
-            allMonths.map(async m => {
-                const mStart = new Date(year, m - 1, 1, 0, 0, 0);
-                const mEnd = new Date(year, m, 0, 23, 59, 59);
-                return calculateDailyMetricsFast(id, mStart, mEnd);
-            })
-        );
-
-        const emptyMonths = [];
-        for (let m = 1; m <= 12; m++) {
-            if (monthlyMap[m].usageKwh === 0) emptyMonths.push(m);
-        }
-
-        if (emptyMonths.length > 0) {
-            const fallbackResults = await Promise.all(
-                emptyMonths.map(async m => {
+        const [monthlyMetrics, missingUsages] = await Promise.all([
+            Promise.all(
+                allMonths.map(async m => {
                     const mStart = new Date(year, m - 1, 1, 0, 0, 0);
                     const mEnd = new Date(year, m, 0, 23, 59, 59);
-                    const resMetrics = await calculateDailyMetricsFast(id, mStart, mEnd);
-                    return resMetrics.usageKwh;
+                    return calculateDailyMetricsFast(id, mStart, mEnd);
                 })
-            );
-            emptyMonths.forEach((m, idx) => {
-                monthlyMap[m].usageKwh = fallbackResults[idx];
-            });
+            ),
+            Promise.all(
+                allMonths.map(m => getMissingUsageForMonth(id, year, m, snapshotDaysSet))
+            )
+        ]);
+
+        for (let m = 1; m <= 12; m++) {
+            monthlyMap[m].usageKwh += missingUsages[m - 1];
         }
 
         const months = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Ags','Sep','Okt','Nov','Des'];
@@ -464,6 +515,7 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
             orderBy: { date: 'asc' },
         });
 
+        const snapshotDaysSet = new Set();
         const yearlyMap = {};
         for (let y = startYear; y <= currentYear; y++) {
             yearlyMap[y] = { year: y, usageKwh: 0, hasResetDay: false };
@@ -479,42 +531,31 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
             if (yearlyMap[targetYear]) {
                 yearlyMap[targetYear].usageKwh += snap.deltaKwh || 0;
                 if (snap.isResetDay) yearlyMap[targetYear].hasResetDay = true;
+                
+                snapshotDaysSet.add(formatDateWIB(targetDate));
             }
         }
 
         const yearsArray = Array.from({ length: currentYear - startYear + 1 }, (_, i) => startYear + i);
-        const yearlyMetrics = await Promise.all(
-            yearsArray.map(async y => {
-                const yStart = new Date(y, 0, 1, 0, 0, 0);
-                const yEnd = new Date(y, 11, 31, 23, 59, 59);
-                return calculateDailyMetricsFast(id, yStart, yEnd);
-            })
-        );
-
-        const emptyYears = [];
-        for (let y = startYear; y <= currentYear; y++) {
-            if (yearlyMap[y].usageKwh === 0) emptyYears.push(y);
-        }
-
-        if (emptyYears.length > 0) {
-            const fallbackResults = await Promise.all(
-                emptyYears.map(async y => {
+        const [yearlyMetrics, missingYearlyUsages] = await Promise.all([
+            Promise.all(
+                yearsArray.map(async y => {
                     const yStart = new Date(y, 0, 1, 0, 0, 0);
                     const yEnd = new Date(y, 11, 31, 23, 59, 59);
-                    const resMetrics = await calculateDailyMetricsFast(id, yStart, yEnd);
-                    return resMetrics.usageKwh;
+                    return calculateDailyMetricsFast(id, yStart, yEnd);
                 })
-            );
-            emptyYears.forEach((y, idx) => {
-                yearlyMap[y].usageKwh = fallbackResults[idx];
-            });
-        }
+            ),
+            Promise.all(
+                yearsArray.map(y => getMissingUsageForYear(id, y, snapshotDaysSet))
+            )
+        ]);
 
         const result = Object.values(yearlyMap).map((y, idx) => {
             const metrics = yearlyMetrics[idx] || { avgVoltage: 0, avgCurrent: 0 };
+            const totalUsage = y.usageKwh + missingYearlyUsages[idx];
             return {
                 ...y,
-                usageKwh: parseFloat(y.usageKwh.toFixed(3)),
+                usageKwh: parseFloat(totalUsage.toFixed(3)),
                 avgVoltage: metrics.avgVoltage,
                 avgCurrent: metrics.avgCurrent,
             };
