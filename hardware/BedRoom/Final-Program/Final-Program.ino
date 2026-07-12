@@ -1077,6 +1077,8 @@ void loop() {
     }
 
     // Selalu kirim data ke server (bahkan saat 0V / mati listrik) agar backend dapat mencatat log matlis
+    Serial.printf("[DEBUG PZEM] V: %.1f V | A: %.3f A | W: %.1f W | E: %.3f kWh | F: %.1f Hz | PF: %.2f\n",
+                  voltage, current, power, energy, frequency, pf);
     sendPzemDataToServer(voltage, current, power, energy, frequency, pf);
     lastPzemSendTime = currentMillis;
   }

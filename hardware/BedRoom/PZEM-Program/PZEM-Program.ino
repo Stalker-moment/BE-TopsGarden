@@ -9,7 +9,7 @@
 const char* ssid = "TierKun_IoT";
 const char* password = "Tier010707";
 const char* serverUrl = "http://192.168.100.149:2055/api/device/pzem/data"; // Ganti dengan URL API Anda
-const char* deviceId = "fa7daf1f-b10f-4480-80f3-80e306484365"; // UUID Device Anda
+const char* deviceId = ""; // UUID Device Anda
 
 // --- KONFIGURASI PIN & SENSOR ---
 #define PZEM_RX_PIN 16
@@ -275,6 +275,8 @@ void loop() {
 
   // Kirim API secara non-blocking SELALU (bahkan saat 0V / sensor error / mati listrik)
   if (millis() - lastSendTime > sendInterval) {
+    Serial.printf("[DEBUG PZEM] V: %.1f V | A: %.3f A | W: %.1f W | E: %.3f kWh | F: %.1f Hz | PF: %.2f\n",
+                  voltage, current, power, energy, frequency, pf);
     sendDataToServer(voltage, current, power, energy, frequency, pf);
     lastSendTime = millis();
   }
