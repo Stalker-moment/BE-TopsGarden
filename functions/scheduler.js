@@ -188,6 +188,13 @@ cron.schedule("*/30 * * * * *", async () => {
 
         for (const device of devices) {
             try {
+                // Check if device has ever sent a log
+                const hasConnectedEver = await prisma.pzemLog.findFirst({
+                    where: { deviceId: device.id },
+                    select: { id: true }
+                });
+                if (!hasConnectedEver) continue;
+
                 // Ambil log terbaru dalam 2 menit terakhir
                 const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
                 const latestLog = await prisma.pzemLog.findFirst({
@@ -249,3 +256,26 @@ cron.schedule("*/30 * * * * *", async () => {
         log.error("Error pada monitor matlis", error.message);
     }
 });
+
+// Clean up erroneous outage logs on startup
+(async () => {
+    try {
+        const devices = await prisma.pzemDevice.findMany();
+        for (const d of devices) {
+            const hasLog = await prisma.pzemLog.findFirst({
+                where: { deviceId: d.id },
+                select: { id: true }
+            });
+            if (!hasLog) {
+                const deleted = await prisma.powerOutageLog.deleteMany({
+                    where: { deviceId: d.id }
+                });
+                if (deleted.count > 0) {
+                    log.info(`Cleaned up ${deleted.count} erroneous outage logs for inactive device ${d.name} (${d.id})`);
+                }
+            }
+        }
+    } catch (err) {
+        log.error("Failed to clean up startup outage logs", err.message);
+    }
+})();
