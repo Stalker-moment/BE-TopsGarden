@@ -1,5 +1,7 @@
 import { prisma } from "../prisma/client.js";
 
+const DEVICE_ONLINE_THRESHOLD_MS = 30_000; // 30 detik
+
 // Mengambil data terakhir dari setiap device PZEM yang aktif
 const sendPzem = async () => {
     try {
@@ -18,6 +20,8 @@ const sendPzem = async () => {
             }
         });
 
+        const now = Date.now();
+
         const results = await Promise.all(devices.map(async (device) => {
             const logs = await prisma.pzemLog.findMany({
                 where: { deviceId: device.id },
@@ -26,14 +30,19 @@ const sendPzem = async () => {
             });
             
             const latest = logs.length > 0 ? logs[0] : null;
+            const lastUpdateMs = latest ? new Date(latest.createdAt).getTime() : null;
+
+            // isOnline: true jika data terakhir diterima dalam 30 detik terakhir
+            const isOnline = lastUpdateMs !== null && (now - lastUpdateMs) < DEVICE_ONLINE_THRESHOLD_MS;
 
             // Gabungkan info device dengan log terakhir
             return {
                 ...device,
                 lastUpdate: latest ? latest.createdAt : null,
-                data: latest || null, // data terupdate (kartu dashboard)
-                logs: logs.slice(0, 20), // 20 data terakhir untuk tabel riwayat
-                chart: [...logs].reverse() // 50 data di-reverse untuk grafik (dari lama ke baru)
+                isOnline,                          // << dari backend, bukan frontend
+                data: latest || null,              // data terupdate (kartu dashboard)
+                logs: logs.slice(0, 20),           // 20 data terakhir untuk tabel riwayat
+                chart: [...logs].reverse()         // 50 data di-reverse untuk grafik (dari lama ke baru)
             };
         }));
 
