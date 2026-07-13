@@ -15,7 +15,7 @@ const char* deviceId = ""; // UUID Device Anda
 #define PZEM_RX_PIN 16
 #define PZEM_TX_PIN 17
 PZEM004Tv30 pzem(Serial2, PZEM_RX_PIN, PZEM_TX_PIN);
-LiquidCrystal_I2C lcd(0x3F, 20, 4);
+LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 // --- DEFINISI CUSTOM CHARACTER (Limit 8) ---
 byte iconVolt[8]   = {B00010, B00110, B01100, B11111, B00110, B01100, B01000, B00000};

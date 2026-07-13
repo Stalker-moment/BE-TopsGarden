@@ -245,6 +245,33 @@ router.get("/pzem/:id/latest", async (req, res) => {
     try {
         const { id } = req.params;
         
+        if (id === "all") {
+            const activeDevices = await prisma.pzemDevice.findMany({ where: { isActive: true } });
+            const latestLogs = await Promise.all(
+                activeDevices.map(d => prisma.pzemLog.findFirst({
+                    where: { deviceId: d.id },
+                    orderBy: { createdAt: 'desc' }
+                }))
+            );
+            
+            const validLogs = latestLogs.filter(Boolean);
+            if (validLogs.length === 0) {
+                return res.json({ latest: { voltage: 0, current: 0, power: 0, energy: 0, frequency: 0, pf: 0 }, status: "OFFLINE" });
+            }
+
+            const latest = {
+                voltage: parseFloat((validLogs.reduce((sum, l) => sum + l.voltage, 0) / validLogs.length).toFixed(1)),
+                current: parseFloat(validLogs.reduce((sum, l) => sum + l.current, 0).toFixed(2)),
+                power: parseFloat(validLogs.reduce((sum, l) => sum + l.power, 0).toFixed(1)),
+                energy: parseFloat(validLogs.reduce((sum, l) => sum + l.energy, 0).toFixed(3)),
+                frequency: parseFloat((validLogs.reduce((sum, l) => sum + l.frequency, 0) / validLogs.length).toFixed(1)),
+                pf: parseFloat((validLogs.reduce((sum, l) => sum + l.pf, 0) / validLogs.length).toFixed(2)),
+                createdAt: new Date().toISOString()
+            };
+
+            return res.json({ latest, status: "ONLINE" });
+        }
+        
         const latest = await prisma.pzemLog.findFirst({
             where: { deviceId: id },
             orderBy: { createdAt: 'desc' }
@@ -278,7 +305,31 @@ router.post("/pzem/:id/reset-command", async (req, res) => {
 // 5. Historical Logs (Table)
 router.get("/pzem/:id/logs", async (req, res) => {
     try {
+        const { id } = req.params;
         const limit = Number(req.query.limit) || 20;
+
+        if (id === "all") {
+            const logs = await prisma.pzemLog.findMany({
+                orderBy: { createdAt: 'desc' },
+                take: limit,
+                include: { device: true }
+            });
+            const formatted = logs.map(l => ({
+                id: l.id,
+                deviceId: l.deviceId,
+                deviceName: l.device?.name || "All",
+                location: l.device?.location || "",
+                voltage: l.voltage,
+                current: l.current,
+                power: l.power,
+                energy: l.energy,
+                frequency: l.frequency,
+                pf: l.pf,
+                createdAt: l.createdAt
+            }));
+            return res.json(formatted);
+        }
+
         const logs = await prisma.pzemLog.findMany({
             where: { deviceId: req.params.id },
             orderBy: { createdAt: 'desc' },
@@ -293,6 +344,51 @@ router.get("/pzem/:id/logs", async (req, res) => {
 // 6. Chart Data (Live Trend - last 50 points)
 router.get("/pzem/:id/chart", async (req, res) => {
     try {
+        const { id } = req.params;
+
+        if (id === "all") {
+            const logs = await prisma.pzemLog.findMany({
+                orderBy: { createdAt: 'desc' },
+                take: 100
+            });
+            
+            const intervals = {};
+            for (const l of logs) {
+                const time = new Date(l.createdAt);
+                time.setSeconds(Math.round(time.getSeconds() / 5) * 5, 0);
+                const key = time.toISOString();
+                
+                if (!intervals[key]) {
+                    intervals[key] = {
+                        createdAt: key,
+                        power: 0,
+                        current: 0,
+                        voltage: 0,
+                        devicesCount: 0,
+                        hasDevice: new Set()
+                    };
+                }
+                
+                if (!intervals[key].hasDevice.has(l.deviceId)) {
+                    intervals[key].hasDevice.add(l.deviceId);
+                    intervals[key].power += l.power;
+                    intervals[key].current += l.current;
+                    intervals[key].voltage += l.voltage;
+                    intervals[key].devicesCount += 1;
+                }
+            }
+            
+            const chartData = Object.values(intervals).map((i: any) => ({
+                id: i.createdAt,
+                power: parseFloat(i.power.toFixed(1)),
+                current: parseFloat(i.current.toFixed(2)),
+                voltage: parseFloat((i.devicesCount > 0 ? i.voltage / i.devicesCount : 220).toFixed(1)),
+                createdAt: i.createdAt
+            })).slice(0, 50).reverse();
+            
+            return res.json(chartData);
+        }
+
         const logs = await prisma.pzemLog.findMany({
             where: { deviceId: req.params.id },
             orderBy: { createdAt: 'desc' },
@@ -436,6 +532,99 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
         const year = Number(req.query.year) || now.getFullYear();
         const month = Number(req.query.month) || (now.getMonth() + 1); // 1-based
 
+        if (id === "all") {
+            const activeDevices = await prisma.pzemDevice.findMany({ where: { isActive: true } });
+            
+            const devicesDaily = await Promise.all(
+                activeDevices.map(async d => {
+                    const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0);
+                    const endDate = new Date(year, month, 1, 23, 59, 59, 999);
+                    const snapshots = await prisma.pzemDailySnapshot.findMany({
+                        where: { deviceId: d.id, date: { gte: startDate, lte: endDate } },
+                        orderBy: { date: 'asc' }
+                    });
+                    
+                    const dayMap = {};
+                    for (const s of snapshots) {
+                        const dateStr = formatDateWIB(s.date);
+                        const [sy, sm, sd] = dateStr.split('-').map(Number);
+                        const targetDate = new Date(sy, sm - 1, sd);
+                        targetDate.setDate(targetDate.getDate() - 1);
+                        if (targetDate.getFullYear() === year && (targetDate.getMonth() + 1) === month) {
+                            dayMap[targetDate.getDate()] = s;
+                        }
+                    }
+                    
+                    const daysInMonth = new Date(year, month, 0).getDate();
+                    const allDays = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+                    const fallbacks = await Promise.all(
+                        allDays.map(dayNum => {
+                            const dStart = new Date(year, month - 1, dayNum, 0, 0, 0);
+                            const dEnd = new Date(year, month - 1, dayNum, 23, 59, 59);
+                            return calculateDailyMetricsFast(d.id, dStart, dEnd);
+                        })
+                    );
+                    
+                    const list = [];
+                    for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
+                        const s = dayMap[dayNum];
+                        const fb = fallbacks[dayNum - 1];
+                        list.push({
+                            day: dayNum,
+                            usageKwh: s?.deltaKwh ?? fb.usageKwh,
+                            avgVoltage: fb.avgVoltage,
+                            avgCurrent: fb.avgCurrent,
+                        });
+                    }
+                    return list;
+                })
+            );
+            
+            const daysInMonth = new Date(year, month, 0).getDate();
+            const aggregatedDays = [];
+            for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
+                const dDate = new Date(year, month - 1, dayNum);
+                const dateLabel = dDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
+                
+                let dayUsageKwh = 0;
+                let sumVoltage = 0;
+                let sumCurrent = 0;
+                let activeCount = 0;
+                
+                for (const dDaily of devicesDaily) {
+                    const item = dDaily[dayNum - 1];
+                    if (item) {
+                        dayUsageKwh += item.usageKwh;
+                        sumVoltage += item.avgVoltage;
+                        sumCurrent += item.avgCurrent;
+                        if (item.avgVoltage > 0) activeCount += 1;
+                    }
+                }
+                
+                aggregatedDays.push({
+                    date: dDate,
+                    dateLabel,
+                    usageKwh: parseFloat(dayUsageKwh.toFixed(3)),
+                    avgVoltage: activeCount > 0 ? parseFloat((sumVoltage / activeCount).toFixed(1)) : 0,
+                    avgCurrent: parseFloat(sumCurrent.toFixed(2)),
+                    energyKwh: 0,
+                    isResetDay: false
+                });
+            }
+            
+            const totalKwh = aggregatedDays.reduce((sum, d) => sum + d.usageKwh, 0);
+            const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
+            
+            return res.json({
+                year,
+                month,
+                totalKwh: parseFloat(totalKwh.toFixed(3)),
+                estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
+                plnRate: PLN_RATE,
+                days: aggregatedDays
+            });
+        }
+
         const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0);
         // Load up to the 1st of the next month to get the next day's snapshot for the last day of this month
         const endDate = new Date(year, month, 1, 23, 59, 59, 999);
@@ -517,6 +706,92 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
     try {
         const { id } = req.params;
         const year = Number(req.query.year) || new Date().getFullYear();
+
+        if (id === "all") {
+            const activeDevices = await prisma.pzemDevice.findMany({ where: { isActive: true } });
+            
+            const monthlyMap = {};
+            for (let m = 1; m <= 12; m++) {
+                monthlyMap[m] = { month: m, usageKwh: 0, avgVoltage: 0, avgCurrent: 0, activeCount: 0 };
+            }
+            
+            for (const d of activeDevices) {
+                const startDate = new Date(year, 0, 1);
+                const endDate = new Date(year + 1, 0, 1, 23, 59, 59);
+                const snapshots = await prisma.pzemDailySnapshot.findMany({
+                    where: { deviceId: d.id, date: { gte: startDate, lte: endDate }, deltaKwh: { not: null } },
+                    orderBy: { date: 'asc' }
+                });
+                
+                const snapshotDaysSet = new Set();
+                const deviceMonthly = {};
+                for (let m = 1; m <= 12; m++) {
+                    deviceMonthly[m] = { usageKwh: 0 };
+                }
+                
+                for (const snap of snapshots) {
+                    const dateStr = formatDateWIB(snap.date);
+                    const [sy, sm, sd] = dateStr.split('-').map(Number);
+                    const targetDate = new Date(sy, sm - 1, sd);
+                    targetDate.setDate(targetDate.getDate() - 1);
+                    if (targetDate.getFullYear() === year) {
+                        const targetMonthNum = targetDate.getMonth() + 1;
+                        deviceMonthly[targetMonthNum].usageKwh += snap.deltaKwh || 0;
+                        snapshotDaysSet.add(formatDateWIB(targetDate));
+                    }
+                }
+                
+                const allMonths = Array.from({ length: 12 }, (_, i) => i + 1);
+                const [monthlyMetrics, missingUsages] = await Promise.all([
+                    Promise.all(
+                        allMonths.map(async m => {
+                            const mStart = new Date(year, m - 1, 1, 0, 0, 0);
+                            const mEnd = new Date(year, m, 0, 23, 59, 59);
+                            return calculateDailyMetricsFast(d.id, mStart, mEnd);
+                        })
+                    ),
+                    Promise.all(
+                        allMonths.map(m => getMissingUsageForMonth(d.id, year, m, snapshotDaysSet))
+                    )
+                ]);
+                
+                for (let m = 1; m <= 12; m++) {
+                    const usage = deviceMonthly[m].usageKwh + missingUsages[m - 1];
+                    monthlyMap[m].usageKwh += usage;
+                    
+                    const metrics = monthlyMetrics[m - 1];
+                    if (metrics.avgVoltage > 0) {
+                        monthlyMap[m].avgVoltage += metrics.avgVoltage;
+                        monthlyMap[m].avgCurrent += metrics.avgCurrent;
+                        monthlyMap[m].activeCount += 1;
+                    }
+                }
+            }
+            
+            const months = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Ags','Sep','Okt','Nov','Des'];
+            const result = Object.values(monthlyMap).map((m: any) => {
+                return {
+                    month: m.month,
+                    usageKwh: parseFloat(m.usageKwh.toFixed(3)),
+                    label: months[m.month - 1],
+                    avgVoltage: m.activeCount > 0 ? parseFloat((m.avgVoltage / m.activeCount).toFixed(1)) : 0,
+                    avgCurrent: parseFloat(m.avgCurrent.toFixed(2)),
+                    hasResetDay: false,
+                    daysCount: 30
+                };
+            });
+            
+            const totalKwh = result.reduce((sum, m) => sum + m.usageKwh, 0);
+            const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
+            
+            return res.json({
+                year,
+                totalKwh: parseFloat(totalKwh.toFixed(3)),
+                estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
+                plnRate: PLN_RATE,
+                months: result
+            });
+        }
 
         const startDate = new Date(year, 0, 1);
         // Extend to Jan 1st of the next year
@@ -609,6 +884,89 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
         const currentYear = new Date().getFullYear();
         const startYear = currentYear - 4; // 5 tahun terakhir
 
+        if (id === "all") {
+            const activeDevices = await prisma.pzemDevice.findMany({ where: { isActive: true } });
+            
+            const yearlyMap = {};
+            for (let y = startYear; y <= currentYear; y++) {
+                yearlyMap[y] = { year: y, usageKwh: 0, avgVoltage: 0, avgCurrent: 0, activeCount: 0 };
+            }
+            
+            for (const d of activeDevices) {
+                const startDate = new Date(startYear, 0, 1);
+                const endDate = new Date(currentYear + 1, 0, 1, 23, 59, 59);
+                const snapshots = await prisma.pzemDailySnapshot.findMany({
+                    where: { deviceId: d.id, date: { gte: startDate, lte: endDate }, deltaKwh: { not: null } },
+                    orderBy: { date: 'asc' }
+                });
+                
+                const snapshotDaysSet = new Set();
+                const deviceYearly = {};
+                for (let y = startYear; y <= currentYear; y++) {
+                    deviceYearly[y] = { usageKwh: 0 };
+                }
+                
+                for (const snap of snapshots) {
+                    const dateStr = formatDateWIB(snap.date);
+                    const [sy, sm, sd] = dateStr.split('-').map(Number);
+                    const targetDate = new Date(sy, sm - 1, sd);
+                    targetDate.setDate(targetDate.getDate() - 1);
+                    const targetYear = targetDate.getFullYear();
+                    if (deviceYearly[targetYear]) {
+                        deviceYearly[targetYear].usageKwh += snap.deltaKwh || 0;
+                        snapshotDaysSet.add(formatDateWIB(targetDate));
+                    }
+                }
+                
+                const yearsArray = Array.from({ length: currentYear - startYear + 1 }, (_, i) => startYear + i);
+                const [yearlyMetrics, missingYearlyUsages] = await Promise.all([
+                    Promise.all(
+                        yearsArray.map(async y => {
+                            const yStart = new Date(y, 0, 1, 0, 0, 0);
+                            const yEnd = new Date(y, 11, 31, 23, 59, 59);
+                            return calculateDailyMetricsFast(d.id, yStart, yEnd);
+                        })
+                    ),
+                    Promise.all(
+                        yearsArray.map(y => getMissingUsageForYear(d.id, y, snapshotDaysSet))
+                    )
+                ]);
+                
+                for (let idx = 0; idx < yearsArray.length; idx++) {
+                    const y = yearsArray[idx];
+                    const usage = deviceYearly[y].usageKwh + missingYearlyUsages[idx];
+                    yearlyMap[y].usageKwh += usage;
+                    
+                    const metrics = yearlyMetrics[idx];
+                    if (metrics.avgVoltage > 0) {
+                        yearlyMap[y].avgVoltage += metrics.avgVoltage;
+                        yearlyMap[y].avgCurrent += metrics.avgCurrent;
+                        yearlyMap[y].activeCount += 1;
+                    }
+                }
+            }
+            
+            const result = Object.values(yearlyMap).map((y: any) => {
+                return {
+                    year: y.year,
+                    usageKwh: parseFloat(y.usageKwh.toFixed(3)),
+                    avgVoltage: y.activeCount > 0 ? parseFloat((y.avgVoltage / y.activeCount).toFixed(1)) : 0,
+                    avgCurrent: parseFloat(y.avgCurrent.toFixed(2)),
+                    hasResetDay: false
+                };
+            });
+            
+            const totalKwh = result.reduce((sum, y) => sum + y.usageKwh, 0);
+            const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
+            
+            return res.json({
+                totalKwh: parseFloat(totalKwh.toFixed(3)),
+                estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
+                plnRate: PLN_RATE,
+                years: result
+            });
+        }
+
         const startDate = new Date(startYear, 0, 1);
         // Extend to Jan 1st of the next year of currentYear
         const endDate = new Date(currentYear + 1, 0, 1, 23, 59, 59);
@@ -694,6 +1052,102 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
 
         const { id } = req.params;
         const targetDateStr = req.query.date ? String(req.query.date) : new Date().toISOString().slice(0, 10);
+
+        if (id === "all") {
+            const activeDevices = await prisma.pzemDevice.findMany({ where: { isActive: true } });
+            
+            const hourMap = {};
+            for (let h = 0; h < 24; h++) {
+                const label = `${String(h).padStart(2, '0')}:00`;
+                hourMap[h] = { hour: h, label, avgPower: 0, maxPower: 0, avgVoltage: 0, usageKwh: 0, count: 0, activeCount: 0 };
+            }
+            
+            for (const d of activeDevices) {
+                const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
+                const startDate = new Date(yearStr, monthStr - 1, dayStr, 0, 0, 0, 0);
+                const endDate = new Date(yearStr, monthStr - 1, dayStr, 23, 59, 59, 999);
+                
+                const logs = await prisma.pzemLog.findMany({
+                    where: { deviceId: d.id, createdAt: { gte: startDate, lte: endDate } },
+                    orderBy: { createdAt: 'asc' }
+                });
+                
+                const deviceHours = {};
+                for (let h = 0; h < 24; h++) {
+                    deviceHours[h] = { count: 0, _powerSum: 0, _voltageSum: 0, maxPower: 0, _minEnergy: null, _maxEnergy: null };
+                }
+                
+                for (const logItem of logs) {
+                    let p = logItem.power;
+                    let v = logItem.voltage;
+                    let e = logItem.energy;
+                    
+                    if (isNaN(p) || p < 0 || p > 25000) p = 0;
+                    if (isNaN(v) || v < 0 || v > 350) v = 0;
+                    if (isNaN(e) || e < 0 || e > 100000) e = 0;
+                    
+                    const h = new Date(logItem.createdAt).getHours();
+                    if (deviceHours[h]) {
+                        const dh = deviceHours[h];
+                        dh.count += 1;
+                        dh._powerSum += p;
+                        dh._voltageSum += v;
+                        if (p > dh.maxPower) dh.maxPower = p;
+                        if (e > 0) {
+                            if (dh._minEnergy === null || e < dh._minEnergy) dh._minEnergy = e;
+                            if (dh._maxEnergy === null || e > dh._maxEnergy) dh._maxEnergy = e;
+                        }
+                    }
+                }
+                
+                for (let h = 0; h < 24; h++) {
+                    const dh = deviceHours[h];
+                    const avgPower = dh.count > 0 ? dh._powerSum / dh.count : 0;
+                    const avgVoltage = dh.count > 0 ? dh._voltageSum / dh.count : 0;
+                    
+                    let usageKwh = 0;
+                    if (dh._minEnergy !== null && dh._maxEnergy !== null && dh._minEnergy > 0) {
+                        const delta = dh._maxEnergy - dh._minEnergy;
+                        if (delta >= 0 && delta < 10) usageKwh = delta;
+                    }
+                    if (usageKwh <= 0 && avgPower > 0) {
+                        const activeDurationHours = Math.min(1.0, (dh.count * 3) / 3600);
+                        usageKwh = (avgPower / 1000) * (activeDurationHours > 0.05 ? activeDurationHours : 1.0);
+                    }
+                    
+                    hourMap[h].usageKwh += usageKwh;
+                    hourMap[h].avgPower += avgPower;
+                    hourMap[h].maxPower += dh.maxPower;
+                    if (avgVoltage > 0) {
+                        hourMap[h].avgVoltage += avgVoltage;
+                        hourMap[h].activeCount += 1;
+                    }
+                }
+            }
+            
+            let totalKwh = 0;
+            const hours = Object.values(hourMap).map((h: any) => {
+                totalKwh += h.usageKwh;
+                return {
+                    hour: h.hour,
+                    label: h.label,
+                    avgPower: parseFloat(h.avgPower.toFixed(1)),
+                    maxPower: parseFloat(h.maxPower.toFixed(1)),
+                    avgVoltage: h.activeCount > 0 ? parseFloat((h.avgVoltage / h.activeCount).toFixed(1)) : 0,
+                    usageKwh: parseFloat(h.usageKwh.toFixed(4)),
+                    count: 60
+                };
+            });
+            
+            const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
+            return res.json({
+                date: targetDateStr,
+                totalKwh: parseFloat(totalKwh.toFixed(3)),
+                estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
+                plnRate: PLN_RATE,
+                hours
+            });
+        }
         
         const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
         const startDate = new Date(yearStr, monthStr - 1, dayStr, 0, 0, 0, 0);
@@ -814,6 +1268,92 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
         const targetDateStr = req.query.date ? String(req.query.date) : now.toISOString().slice(0, 10);
         const targetHour = req.query.hour !== undefined ? Number(req.query.hour) : now.getHours();
 
+        if (id === "all") {
+            const activeDevices = await prisma.pzemDevice.findMany({ where: { isActive: true } });
+            
+            const minuteMap = {};
+            for (let m = 0; m < 60; m++) {
+                const label = `${String(targetHour).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                minuteMap[m] = { minute: m, label, avgPower: 0, avgVoltage: 0, avgCurrent: 0, usageKwh: 0, activeCount: 0 };
+            }
+            
+            for (const d of activeDevices) {
+                const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
+                const startDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 0, 0, 0);
+                const endDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 59, 59, 999);
+                
+                const logs = await prisma.pzemLog.findMany({
+                    where: { deviceId: d.id, createdAt: { gte: startDate, lte: endDate } },
+                    orderBy: { createdAt: 'asc' }
+                });
+                
+                const deviceMinutes = {};
+                for (let m = 0; m < 60; m++) {
+                    deviceMinutes[m] = { count: 0, _powerSum: 0, _voltageSum: 0, _currentSum: 0 };
+                }
+                
+                for (const logItem of logs) {
+                    let p = logItem.power;
+                    let v = logItem.voltage;
+                    let a = logItem.current;
+                    
+                    if (isNaN(p) || p < 0 || p > 25000) p = 0;
+                    if (isNaN(v) || v < 0 || v > 350) v = 0;
+                    if (isNaN(a) || a < 0 || a > 120) a = 0;
+                    
+                    const m = new Date(logItem.createdAt).getMinutes();
+                    if (deviceMinutes[m]) {
+                        const dm = deviceMinutes[m];
+                        dm.count += 1;
+                        dm._powerSum += p;
+                        dm._voltageSum += v;
+                        dm._currentSum += a;
+                    }
+                }
+                
+                for (let m = 0; m < 60; m++) {
+                    const dm = deviceMinutes[m];
+                    const avgPower = dm.count > 0 ? dm._powerSum / dm.count : 0;
+                    const avgVoltage = dm.count > 0 ? dm._voltageSum / dm.count : 0;
+                    const avgCurrent = dm.count > 0 ? dm._currentSum / dm.count : 0;
+                    
+                    const usageKwh = (avgPower / 1000) / 60;
+                    
+                    minuteMap[m].usageKwh += usageKwh;
+                    minuteMap[m].avgPower += avgPower;
+                    minuteMap[m].avgCurrent += avgCurrent;
+                    if (avgVoltage > 0) {
+                        minuteMap[m].avgVoltage += avgVoltage;
+                        minuteMap[m].activeCount += 1;
+                    }
+                }
+            }
+            
+            let totalKwh = 0;
+            const minutes = Object.values(minuteMap).map((m: any) => {
+                totalKwh += m.usageKwh;
+                return {
+                    minute: m.minute,
+                    label: m.label,
+                    avgPower: parseFloat(m.avgPower.toFixed(1)),
+                    avgCurrent: parseFloat(m.avgCurrent.toFixed(2)),
+                    avgVoltage: m.activeCount > 0 ? parseFloat((m.avgVoltage / m.activeCount).toFixed(1)) : 0,
+                    usageKwh: parseFloat(m.usageKwh.toFixed(5)),
+                    count: 1
+                };
+            });
+            
+            const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
+            return res.json({
+                date: targetDateStr,
+                hour: targetHour,
+                totalKwh: parseFloat(totalKwh.toFixed(4)),
+                estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
+                plnRate: PLN_RATE,
+                minutes
+            });
+        }
+
         const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
         const startDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 0, 0, 0);
         const endDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 59, 59, 999);
@@ -911,6 +1451,28 @@ router.get("/pzem/:id/outage-logs", async (req, res) => {
         const limit = Number(req.query.limit) || 20;
         const page = Number(req.query.page) || 1;
         const skip = (page - 1) * limit;
+
+        if (id === "all") {
+            const [logs, total] = await Promise.all([
+                prisma.powerOutageLog.findMany({
+                    orderBy: { startedAt: 'desc' },
+                    take: limit,
+                    skip,
+                    include: { device: true }
+                }),
+                prisma.powerOutageLog.count()
+            ]);
+            
+            const formattedLogs = logs.map(l => ({
+                ...l,
+                deviceName: l.device?.name || "Unknown",
+                location: l.device?.location || "",
+                durationFormatted: l.durationSec ? formatDuration(l.durationSec) : null,
+                status: l.endedAt ? 'SELESAI' : 'BERLANGSUNG'
+            }));
+            
+            return res.json({ total, page, limit, logs: formattedLogs });
+        }
 
         const [logs, total] = await Promise.all([
             prisma.powerOutageLog.findMany({

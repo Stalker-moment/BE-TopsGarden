@@ -299,13 +299,13 @@ void handleKeypadInput(char key) {
   }
   else if (currentUIState == STATE_EDIT_THRESHOLD) {
     if (key >= '0' && key <= '9') {
-      if (inputBuffer.length() < 3) inputBuffer += key;
+      if (inputBuffer.length() < 4) inputBuffer += key;
     } else if (key == '*') {
       currentUIState = STATE_SETTINGS_MENU;
       lcd.clear();
     } else if (key == '#') {
       if (inputBuffer.length() > 0) {
-        float val = atoi(inputBuffer.c_str()) / 10.0;
+        float val = atoi(inputBuffer.c_str()) / 100.0;
         if (val >= 0.2 && val <= 25.0) {
           overcurrentThreshold = val;
           preferences.begin("pzem_settings", false);
@@ -452,7 +452,7 @@ void updateLCDDisplay(float v, float a, float p, float e) {
   }
   else if (currentUIState == STATE_SETTINGS_MENU) {
     lcd.setCursor(0, 0);
-    lcd.printf("1.Limit: %.1fA", overcurrentThreshold);
+    lcd.printf("1.Limit: %.2fA", overcurrentThreshold);
     lcd.setCursor(0, 1);
     lcd.printf("2.Delay: %ds", overcurrentDelay);
     lcd.setCursor(0, 2);
@@ -462,16 +462,16 @@ void updateLCDDisplay(float v, float a, float p, float e) {
   }
   else if (currentUIState == STATE_EDIT_THRESHOLD) {
     lcd.setCursor(0, 0);
-    lcd.print("= EDIT LIMIT (10th) ");
+    lcd.print("= EDIT LIMIT (100th)");
     lcd.setCursor(0, 1);
-    lcd.printf("Current: %.1f A", overcurrentThreshold);
+    lcd.printf("Current: %.2f A", overcurrentThreshold);
     lcd.setCursor(0, 2);
     lcd.print("New: ");
     lcd.print(inputBuffer);
     if (inputBuffer.length() > 0) {
-      lcd.printf(" -> %.1fA  ", atoi(inputBuffer.c_str()) / 10.0);
+      lcd.printf(" -> %.2fA  ", atoi(inputBuffer.c_str()) / 100.0);
     } else {
-      lcd.print(" [___] A  ");
+      lcd.print(" [____] A ");
     }
     lcd.setCursor(0, 3);
     lcd.print("*:Cancel    #:Save  ");
@@ -582,7 +582,7 @@ void sendDataToServer(float v, float a, float p, float e, float f, float pf) {
       bool serverAutoRec = resDoc["autoReconnect"] | false;
       int serverRecDelay = resDoc["reconnectDelay"] | 30;
 
-      if (abs(serverThreshold - overcurrentThreshold) < 0.05 &&
+      if (abs(serverThreshold - overcurrentThreshold) < 0.005 &&
           serverDelay == overcurrentDelay &&
           serverAutoRec == autoReconnect &&
           serverRecDelay == reconnectDelay) {
@@ -597,7 +597,7 @@ void sendDataToServer(float v, float a, float p, float e, float f, float pf) {
 
       if (resDoc.containsKey("overcurrentThreshold")) {
         float serverThreshold = resDoc["overcurrentThreshold"];
-        if (abs(overcurrentThreshold - serverThreshold) >= 0.05) {
+        if (abs(overcurrentThreshold - serverThreshold) >= 0.005) {
           overcurrentThreshold = serverThreshold;
           preferences.putFloat("threshold", overcurrentThreshold);
           needsWrite = true;
