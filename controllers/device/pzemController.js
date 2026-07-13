@@ -378,7 +378,7 @@ router.get("/pzem/:id/chart", async (req, res) => {
                 }
             }
             
-            const chartData = Object.values(intervals).map((i: any) => ({
+            const chartData = Object.values(intervals).map((i) => ({
                 id: i.createdAt,
                 power: parseFloat(i.power.toFixed(1)),
                 current: parseFloat(i.current.toFixed(2)),
@@ -769,7 +769,7 @@ router.get("/pzem/:id/monthly-usage", async (req, res) => {
             }
             
             const months = ['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Ags','Sep','Okt','Nov','Des'];
-            const result = Object.values(monthlyMap).map((m: any) => {
+            const result = Object.values(monthlyMap).map((m) => {
                 return {
                     month: m.month,
                     usageKwh: parseFloat(m.usageKwh.toFixed(3)),
@@ -946,7 +946,7 @@ router.get("/pzem/:id/yearly-usage", async (req, res) => {
                 }
             }
             
-            const result = Object.values(yearlyMap).map((y: any) => {
+            const result = Object.values(yearlyMap).map((y) => {
                 return {
                     year: y.year,
                     usageKwh: parseFloat(y.usageKwh.toFixed(3)),
@@ -1126,7 +1126,7 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
             }
             
             let totalKwh = 0;
-            const hours = Object.values(hourMap).map((h: any) => {
+            const hours = Object.values(hourMap).map((h) => {
                 totalKwh += h.usageKwh;
                 return {
                     hour: h.hour,
@@ -1330,7 +1330,7 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
             }
             
             let totalKwh = 0;
-            const minutes = Object.values(minuteMap).map((m: any) => {
+            const minutes = Object.values(minuteMap).map((m) => {
                 totalKwh += m.usageKwh;
                 return {
                     minute: m.minute,
