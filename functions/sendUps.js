@@ -1,25 +1,15 @@
 import { prisma } from "../prisma/client.js";
 
-// Mengambil data terakhir dari setiap device PZEM yang aktif
-const sendPzem = async () => {
+// Mengambil data terakhir dari setiap device UPS yang aktif
+const sendUps = async () => {
     try {
-        const devices = await prisma.pzemDevice.findMany({
+        const devices = await prisma.upsDevice.findMany({
             where: { isActive: true },
-            select: { 
-                id: true, 
-                name: true, 
-                location: true,
-                hasRelay: true,
-                relayState: true,
-                overcurrentThreshold: true,
-                overcurrentDelay: true,
-                autoReconnect: true,
-                reconnectDelay: true
-            }
+            select: { id: true, name: true, location: true, config: true }
         });
 
         const results = await Promise.all(devices.map(async (device) => {
-            const logs = await prisma.pzemLog.findMany({
+            const logs = await prisma.upsLog.findMany({
                 where: { deviceId: device.id },
                 orderBy: { createdAt: 'desc' },
                 take: 50 // Ambil 50 data untuk kebutuhan realtime chart & logs
@@ -39,9 +29,9 @@ const sendPzem = async () => {
 
         return results;
     } catch (error) {
-        console.error("Error fetching PZEM data:", error);
+        console.error("Error fetching UPS data:", error);
         return [];
     }
 };
 
-export default sendPzem;
+export default sendUps;

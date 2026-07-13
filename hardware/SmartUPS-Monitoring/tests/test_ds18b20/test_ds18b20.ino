@@ -7,7 +7,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
-#define PIN_ONE_WIRE 4
+#define PIN_ONE_WIRE 23  // Ganti dari 4 ke 23
 
 OneWire oneWire(PIN_ONE_WIRE);
 DallasTemperature sensors(&oneWire);

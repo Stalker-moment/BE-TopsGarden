@@ -7,10 +7,13 @@ const router = express.Router();
 const log = createLogger("PzemController");
 
 // === DATA INGESTION (from ESP32) ===
-// Payload: { deviceId, voltage, current, power, energy, frequency, pf }
+// Payload: { deviceId, voltage, current, power, energy, frequency, pf, relayState, overcurrentThreshold, overcurrentDelay, autoReconnect, reconnectDelay }
 router.post("/pzem/data", async (req, res) => {
     try {
-        const { deviceId, voltage, current, power, energy, frequency, pf } = req.body;
+        const { 
+            deviceId, voltage, current, power, energy, frequency, pf, relayState, 
+            overcurrentThreshold, overcurrentDelay, autoReconnect, reconnectDelay 
+        } = req.body;
 
         // 1. Basic Validation
         if (!deviceId) return res.status(400).json({ error: "Device ID required" });
@@ -39,12 +42,79 @@ router.post("/pzem/data", async (req, res) => {
             createdAt: new Date()
         });
 
-
-        // 3. Logic Reset Energy
+        // 3. Fetch Device State (including Relay Configuration)
         const device = await prisma.pzemDevice.findUnique({
             where: { id: deviceId },
-            select: { shouldReset: true }
+            select: { 
+                shouldReset: true,
+                hasRelay: true,
+                relayState: true,
+                overcurrentThreshold: true,
+                overcurrentDelay: true,
+                autoReconnect: true,
+                reconnectDelay: true
+            }
         });
+
+        if (device) {
+            if (relayState !== undefined && typeof relayState === "boolean" && device.relayState !== relayState) {
+                // Update database to reflect local state (e.g. ESP32 local trip)
+                await prisma.pzemDevice.update({
+                    where: { id: deviceId },
+                    data: { relayState }
+                });
+                device.relayState = relayState;
+                log.info(`Synced physical relay state from device ${deviceId} to: ${relayState}`);
+            }
+
+            if (overcurrentThreshold !== undefined && !isNaN(Number(overcurrentThreshold))) {
+                const numThreshold = Number(overcurrentThreshold);
+                if (device.overcurrentThreshold !== numThreshold) {
+                    await prisma.pzemDevice.update({
+                        where: { id: deviceId },
+                        data: { overcurrentThreshold: numThreshold }
+                    });
+                    device.overcurrentThreshold = numThreshold;
+                    log.info(`Synced overcurrentThreshold from device ${deviceId} to: ${numThreshold} A`);
+                }
+            }
+
+            if (overcurrentDelay !== undefined && !isNaN(Number(overcurrentDelay))) {
+                const numDelay = Number(overcurrentDelay);
+                if (device.overcurrentDelay !== numDelay) {
+                    await prisma.pzemDevice.update({
+                        where: { id: deviceId },
+                        data: { overcurrentDelay: numDelay }
+                    });
+                    device.overcurrentDelay = numDelay;
+                    log.info(`Synced overcurrentDelay from device ${deviceId} to: ${numDelay} s`);
+                }
+            }
+
+            if (autoReconnect !== undefined) {
+                const boolVal = autoReconnect === true || autoReconnect === "true";
+                if (device.autoReconnect !== boolVal) {
+                    await prisma.pzemDevice.update({
+                        where: { id: deviceId },
+                        data: { autoReconnect: boolVal }
+                    });
+                    device.autoReconnect = boolVal;
+                    log.info(`Synced autoReconnect from device ${deviceId} to: ${boolVal}`);
+                }
+            }
+
+            if (reconnectDelay !== undefined && !isNaN(Number(reconnectDelay))) {
+                const numRecDelay = Number(reconnectDelay);
+                if (device.reconnectDelay !== numRecDelay) {
+                    await prisma.pzemDevice.update({
+                        where: { id: deviceId },
+                        data: { reconnectDelay: numRecDelay }
+                    });
+                    device.reconnectDelay = numRecDelay;
+                    log.info(`Synced reconnectDelay from device ${deviceId} to: ${numRecDelay} s`);
+                }
+            }
+        }
 
         let command = "OK";
         let shouldReset = device?.shouldReset || false;
@@ -67,10 +137,15 @@ router.post("/pzem/data", async (req, res) => {
             }
         }
 
-        // 4. Return Response (Command ke ESP32)
+        // 4. Return Response (Command & Relay settings to ESP32)
         res.json({
             status: "success",
-            command: command // ESP32 baca ini: jika "RESET_ENERGY" -> eksekusi reset kwh
+            command: command,
+            relayState: device ? device.relayState : true,
+            overcurrentThreshold: device ? device.overcurrentThreshold : 10.0,
+            overcurrentDelay: device ? device.overcurrentDelay : 0,
+            autoReconnect: device ? device.autoReconnect : false,
+            reconnectDelay: device ? device.reconnectDelay : 30
         });
 
     } catch (error) {
@@ -107,17 +182,49 @@ router.post("/pzem", async (req, res) => {
     }
 });
 
-// 2b. Update Device (Edit name/location)
+// 2b. Update Device (Edit name/location/relay settings)
 router.put("/pzem/:id", async (req, res) => {
     try {
-        const { name, location, isActive } = req.body;
+        const { 
+            name, location, isActive, hasRelay, relayState, 
+            overcurrentThreshold, overcurrentDelay, autoReconnect, reconnectDelay 
+        } = req.body;
         const updatedDevice = await prisma.pzemDevice.update({
             where: { id: req.params.id },
-            data: { name, location, isActive }
+            data: { 
+                name, 
+                location, 
+                isActive,
+                ...(hasRelay !== undefined && { hasRelay: Boolean(hasRelay) }),
+                ...(relayState !== undefined && { relayState: Boolean(relayState) }),
+                ...(overcurrentThreshold !== undefined && { overcurrentThreshold: Number(overcurrentThreshold) }),
+                ...(overcurrentDelay !== undefined && { overcurrentDelay: Number(overcurrentDelay) }),
+                ...(autoReconnect !== undefined && { autoReconnect: Boolean(autoReconnect) }),
+                ...(reconnectDelay !== undefined && { reconnectDelay: Number(reconnectDelay) })
+            }
         });
         res.json(updatedDevice);
     } catch (error) {
         res.status(400).json({ error: error.message });
+    }
+});
+
+// 2b-2. Direct Toggle Relay (Manual Control from UI)
+router.post("/pzem/:id/relay", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { relayState } = req.body; // boolean
+        if (relayState === undefined) return res.status(400).json({ error: "relayState is required" });
+        
+        const updatedDevice = await prisma.pzemDevice.update({
+            where: { id },
+            data: { relayState: Boolean(relayState) }
+        });
+        
+        log.info(`User manual-toggled relay to ${relayState} for device ${id}`);
+        res.json({ message: "Relay state updated", relayState: updatedDevice.relayState });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 

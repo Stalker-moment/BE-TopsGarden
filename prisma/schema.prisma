@@ -102,6 +102,14 @@ model PzemDevice {
   shouldReset Boolean   @default(false) // Flag: Jika true, server minta alat reset energy
   lastResetAt DateTime? // Waktu terakhir berhasil reset
 
+  // Fitur Kontrol Relay & Threshold Proteksi Overcurrent
+  hasRelay             Boolean   @default(false) // Flag: apakah alat memiliki modul relay proteksi
+  relayState           Boolean   @default(true)  // State relay: true (ON/Normal), false (OFF/Cutoff)
+  overcurrentThreshold Float     @default(10.0)  // Threshold arus (dalam Ampere) untuk trip relay
+  overcurrentDelay     Int       @default(0)     // Waktu tunda overcurrent (detik), 0 = instan / spike
+  autoReconnect        Boolean   @default(false) // Apakah relay akan menyala kembali otomatis
+  reconnectDelay       Int       @default(30)    // Waktu tunggu sebelum auto-reconnect (detik)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -406,3 +414,46 @@ enum StepStatus {
   IN_PROGRESS
   COMPLETED
 }
+
+// === Module Smart UPS (3S Li-ion Battery & Telemetry) ===
+
+model UpsDevice {
+  id        String   @id @default(uuid())
+  name      String   @unique // e.g., "Smart UPS #1"
+  location  String?  // e.g., "Main Server Room"
+  isActive  Boolean  @default(true)
+  config    Json     @default("{\"sensors\": {\"cells\": true, \"voltageIn\": true, \"ina12v\": true, \"ina5v\": true, \"temperatures\": [{\"id\": \"system\", \"label\": \"System Temp\"}, {\"id\": \"mosfet\", \"label\": \"MOSFET Temp\"}, {\"id\": \"ambient\", \"label\": \"Ambient Temp\"}]}}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  logs      UpsLog[]
+}
+
+model UpsLog {
+  id           String    @id @default(uuid())
+  deviceId     String
+  device       UpsDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  // Battery 3S cell voltages
+  cell1Voltage Float
+  cell2Voltage Float
+  cell3Voltage Float
+  totalVoltage Float
+  voltageIn    Float     @default(0) // Input voltage from adapter (e.g. ~12V)
+
+  // INA219 12V Bus
+  voltage12v   Float
+  current12v   Float // (mA)
+
+  // INA219 5V Bus
+  voltage5v    Float
+  current5v    Float // (mA)
+
+  // Detailed temperatures (Json for support detail - e.g., {"system": 32.5, "mosfet": 42.8, "ambient": 28.4})
+  temperatures Json
+
+  createdAt    DateTime  @default(now())
+
+  @@index([deviceId, createdAt])
+}
+

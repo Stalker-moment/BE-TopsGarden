@@ -33,11 +33,13 @@ import handleDataOutputSocket from "./sockets/dataOutput.js";
 import handleDataSensorSocket from "./sockets/dataSensor.js";
 import handleDataLogsSocket from "./sockets/dataLogs.js";
 import handleDataPzemSocket from "./sockets/dataPzem.js";
+import handleDataUpsSocket from "./sockets/dataUps.js";
 
 import deviceSensor from "./controllers/device/receiveSensor.js";
 import deviceOutput from "./controllers/device/output.js";
 import devicePzem from "./controllers/device/pzemController.js";
 import deviceServerBattery from "./controllers/device/serverBatteryController.js";
+import deviceUps from "./controllers/device/upsController.js";
 import sensorHistory from "./controllers/sensor/history.js";
 
 //import cronjob from "./functions/scheduler.js";
@@ -84,6 +86,7 @@ app.use("/api/device", deviceSensor);
 app.use("/api/device", deviceOutput);
 app.use("/api/device", devicePzem);
 app.use("/api/device", deviceServerBattery);
+app.use("/api/device", deviceUps);
 app.use("/api/sensor", sensorHistory);
 
 app.use((req, res) => {
@@ -102,6 +105,7 @@ wss.on("connection", (ws, req) => {
     "/dataSensor": handleDataSensorSocket,
     "/logs": handleDataLogsSocket,
     "/pzem": handleDataPzemSocket,
+    "/ups": handleDataUpsSocket,
   };
 
   const matchedRoute = Object.keys(routes).find((route) =>
