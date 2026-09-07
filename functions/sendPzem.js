@@ -105,9 +105,9 @@ const sendPzem = async () => {
                 lastUpdate: latest ? latest.createdAt : null,
                 isOnline,                          // dari backend
                 data: latest || null,              // data terupdate (kartu dashboard)
-                logs: logs.slice(0, 20),           // 20 data terakhir untuk tabel riwayat
-                chart: [...logs].reverse(),        // 50 data di-reverse untuk grafik
-                outageLogs: outageData.logs,       // outage logs per device (cached)
+                logs: logs.slice(0, 20).map(l => ({ ...l, deviceName: device.name, deviceLocation: device.location })), // 20 data terakhir untuk tabel riwayat
+                chart: [...logs].reverse().map(l => ({ ...l, deviceName: device.name, deviceLocation: device.location })), // 50 data di-reverse untuk grafik
+                outageLogs: (outageData.logs || []).map(o => ({ ...o, deviceName: device.name, deviceLocation: device.location })), // outage logs per device (cached)
                 outageTotal: outageData.total,
             };
         }));

@@ -719,7 +719,14 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
                 totalKwh: parseFloat(totalKwh.toFixed(3)),
                 estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
                 plnRate: PLN_RATE,
-                days: aggregatedDays
+                days: aggregatedDays,
+                devices: activeDevices.map((d, idx) => ({
+                    id: d.id,
+                    name: d.name,
+                    location: d.location,
+                    totalKwh: parseFloat((devicesDaily[idx] || []).reduce((sum, item) => sum + item.usageKwh, 0).toFixed(3)),
+                    days: devicesDaily[idx] || []
+                }))
             };
 
             const ttl = isCurrentMonth ? DAILY_CACHE_TTL_CURRENT : DAILY_CACHE_TTL_PAST;
@@ -1611,6 +1618,7 @@ router.get("/pzem/:id/outage-logs", async (req, res) => {
                 orderBy: { startedAt: 'desc' },
                 take: limit,
                 skip,
+                include: { device: true }
             }),
             prisma.powerOutageLog.count({
                 where: { deviceId: id },
@@ -1620,6 +1628,8 @@ router.get("/pzem/:id/outage-logs", async (req, res) => {
         // Format durasi yang lebih readable
         const formattedLogs = logs.map(l => ({
             ...l,
+            deviceName: l.device?.name || "Unknown",
+            location: l.device?.location || "",
             durationFormatted: l.durationSec
                 ? formatDuration(l.durationSec)
                 : null,
