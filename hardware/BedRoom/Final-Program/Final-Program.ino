@@ -11,16 +11,28 @@
 Preferences preferences;
 
 // --- KONFIGURASI WIFI ---
-const char* ssid = "TierKun_IoT";
-const char* password = "Tier010707";
+const char* ssid = "Sheraton";
+const char* password = "12345678";
 
 // --- KONFIGURASI API KEYPAD ---
-const String listUrl = "http://192.168.100.149:2055/api/device/outputs";
-const String updateUrl = "http://192.168.100.149:2055/api/device/output/";
+const String listUrl = "https://gardenapi.tierkun.my.id/api/device/outputs";
+const String updateUrl = "https://gardenapi.tierkun.my.id/api/device/output/";
 
 // --- KONFIGURASI API PZEM ---
-const char* pzemServerUrl = "http://192.168.100.149:2055/api/device/pzem/data";
-const char* pzemDeviceId = "fa7daf1f-b10f-4480-80f3-80e306484365";
+const char* pzemServerUrl = "https://gardenapi.tierkun.my.id/api/device/pzem/data";
+const char* pzemDeviceId = "35e824b5-8bd4-4bc1-b023-a133f7388259";
+
+// --- KONFIGURASI API CUACA OPEN-METEO (OPENSOURCE) ---
+// Surakarta (Solo), Jawa Tengah, Indonesia: Lat -7.5666, Lon 110.8166
+const char* weatherApiUrl = "http://api.open-meteo.com/v1/forecast?latitude=-7.5666&longitude=110.8166&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m";
+
+// Live Weather Variables (Updated Asynchronously via Core 0)
+volatile float weatherTemp = 0.0;
+volatile int weatherHumidity = 0;
+volatile int weatherCode = 0;
+volatile float weatherWind = 0.0;
+volatile bool weatherValid = false;
+String weatherDesc = "Memuat...";
 
 // --- KONFIGURASI NTP ---
 const char* ntpServer = "pool.ntp.org";
@@ -52,22 +64,22 @@ const int freq = 5000;
 const int resolution = 8;
 
 // --- SMOOTH BRIGHTNESS VARIABLES ---
-int currentBrightness = 200;  
-int targetBrightness = 200;
+int currentBrightness = 255;  
+int targetBrightness = 255;
 unsigned long lastFadeTime = 0;
 const int fadeInterval = 5;  
 
 // --- KEYPAD 3x4 ---
 /*
 D13 - Merah
-D15 - Ungu
+D12 - Ungu
 D14 - Biru
 D27 - Kuning
 
 D26 - Hijau
 D25 - Coklat
 D33 - Orange
-*/
+*/    
 const byte ROWS = 4;
 const byte COLS = 3;
 char keys[ROWS][COLS] = {
@@ -76,11 +88,11 @@ char keys[ROWS][COLS] = {
   { '7', '8', '9' },
   { '*', '0', '#' }
 };
-byte rowPins[ROWS] = { 13, 15, 14, 27 };
+byte rowPins[ROWS] = { 13, 12, 14, 27 };
 byte colPins[COLS] = { 26, 25, 33 };
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 
-LiquidCrystal_I2C lcd(0x3F, 20, 4);
+LiquidCrystal_I2C lcd(0x27, 20, 4);
 
 struct Lampu {
   String id;
@@ -100,6 +112,7 @@ enum AppState {
   STATE_PARENT_MENU,
   STATE_MENU_LIST_LAMPU,
   STATE_MENU_SYSTEM,
+  STATE_MENU_WEATHER,
   STATE_MENU_SETTINGS,
   STATE_MENU_POWER,
   STATE_SCREEN_SAVER,
@@ -111,7 +124,7 @@ AppState currentState = STATE_BOOT;
 
 // PARENT MENU variables
 int parentMenuCursor = 0; 
-#define PARENT_ITEM_COUNT 4
+#define PARENT_ITEM_COUNT 5
 
 // SETTINGS VARIABLES
 int settingsCursor = 0;
@@ -139,10 +152,16 @@ unsigned long lastScrollTime = 0;
 String timeInputBuffer = "";
 String tempTurnOnTime = "";
 
-// PZEM Timing variables
-unsigned long lastPzemSendTime = 0;
-const unsigned long pzemSendInterval = 2000;
+// PZEM Timing & Live Async Variables
 unsigned long lastPzemUpdate = 0;
+volatile float liveVoltage = 0.0;
+volatile float liveCurrent = 0.0;
+volatile float livePower = 0.0;
+volatile float liveEnergy = 0.0;
+volatile float liveFrequency = 0.0;
+volatile float livePf = 0.0;
+volatile bool livePzemValid = false;
+TaskHandle_t pzemTaskHandle = NULL;
 
 // ANIMATION
 int animFrame = 0;
@@ -184,21 +203,33 @@ byte barPz3[8] = {B11100, B11100, B11100, B11100, B11100, B11100, B11100, B11100
 byte barPz4[8] = {B11110, B11110, B11110, B11110, B11110, B11110, B11110, B11110};
 
 void setMenuIcons() {
+  lcd.createChar(0, wifiIcon);
   lcd.createChar(2, arrowUp);
   lcd.createChar(3, arrowDown);
+  lcd.createChar(6, selector);
 }
 
 void setControlIcons() {
+  lcd.createChar(0, wifiIcon);
   lcd.createChar(2, lampOff);
   lcd.createChar(3, lampOn);
+  lcd.createChar(4, flipperF1);
+  lcd.createChar(5, flipperF2);
 }
 
 void setParentIcons() {
+  lcd.createChar(0, wifiIcon);
+  lcd.createChar(1, battIcon);
   lcd.createChar(2, iconPanahKiri);
   lcd.createChar(3, iconPanahKanan);
+  lcd.createChar(4, flipperF1);
+  lcd.createChar(5, flipperF2);
+  lcd.createChar(6, selector);
+  lcd.createChar(7, solidBlock);
 }
 
 void setSystemIcons() {
+  lcd.createChar(0, wifiIcon);
   lcd.createChar(2, pBar1);
   lcd.createChar(3, pBar2);
   lcd.createChar(4, pBar3);
@@ -217,12 +248,6 @@ void setPzemIcons() {
 }
 
 void setupIcons() {
-  lcd.createChar(0, wifiIcon);
-  lcd.createChar(1, battIcon);
-  lcd.createChar(4, flipperF1);
-  lcd.createChar(5, flipperF2);
-  lcd.createChar(6, selector);
-  lcd.createChar(7, solidBlock);
   setParentIcons();
 }
 
@@ -236,61 +261,79 @@ void playTransition() {
       lcd.setCursor(col, row);
       lcd.write(7);
     }
-    delay(10);
+    delay(2);
   }
   for (int col = 0; col < 20; col++) {
     for (int row = 0; row < 4; row++) {
       lcd.setCursor(col, row);
       lcd.print(" ");
     }
-    delay(10);
+    delay(2);
   }
 }
+
+// Forward declaration background task Core 0
+void pzemBackgroundTask(void *pvParameters);
 
 void setup() {
   Serial.begin(115200);
 
   ledcAttach(LCD_BRIGHT, freq, resolution);
-  setLcdBrightness(200);
+  setLcdBrightness(255);
 
   pinMode(LDR_PIN, INPUT);
   pinMode(RELAY_1, OUTPUT);
   pinMode(RELAY_2, OUTPUT);
 
+  // Keypad Fast Debounce & 1-Click Instant Response
+  keypad.setDebounceTime(10);
+  keypad.setHoldTime(500);
+
   lcd.init();
   lcd.backlight();
   setupIcons();
 
-  lcd.setCursor(4, 1);
-  lcd.print("GARDEN_OS v4");
-  lcd.setCursor(2, 2);
-  for (int i = 0; i < 16; i++) {
-    lcd.write(7);
-    delay(30);
-  }
-  delay(300);
+  lcd.setCursor(1, 0);
+  lcd.print(".----------------.");
+  lcd.setCursor(2, 1);
+  lcd.print("[ GARDEN_OS v4 ]");
+  lcd.setCursor(1, 2);
+  lcd.print("'----------------'");
+  lcd.setCursor(3, 3);
+  lcd.print("BOOTING SYSTEM...");
+  delay(400);
 
   playTransition();
 
   lcd.setCursor(0, 0);
-  lcd.print("WiFi Handshake...");
+  lcd.print("[ WIFI CONNECT ]");
   lcd.setCursor(0, 1);
-  lcd.print(ssid);
+  lcd.print("SSID: ");
+  lcd.print(String(ssid).substring(0, 14));
 
   WiFi.begin(ssid, password);
   int dots = 0;
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+    delay(300);
     lcd.setCursor(0, 2);
-    for (int i = 0; i < dots; i++) lcd.print(".");
-    lcd.print("   ");  
-    dots = (dots + 1) % 10;
+    lcd.print("Status: Linking");
+    for (int i = 0; i < (dots % 5); i++) lcd.print(".");
+    lcd.print("     ");  
+    dots++;
   }
   
+  lcd.setCursor(0, 2);
+  lcd.print("Status: CONNECTED! ");
+  lcd.setCursor(0, 3);
+  lcd.print("IP: ");
+  lcd.print(WiFi.localIP().toString());
+  delay(500);
+
   // Init NTP
   lcd.setCursor(0, 3);
-  lcd.print("Syncing Time NTP");
+  lcd.print("Sync Time (NTP)...  ");
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  delay(300);
 
   preferences.begin("gardenos", false);
   ssEnabled = preferences.getBool("ss_en", true);
@@ -298,6 +341,17 @@ void setup() {
 
   playTransition();
   fetchLampu();
+
+  // Jalankan pembacaan PZEM & Telemetry di background Core 0 (Bebaskan Core 1 untuk UI Keypad 100% responsif)
+  xTaskCreatePinnedToCore(
+    pzemBackgroundTask,
+    "PzemBgTask",
+    8192,
+    NULL,
+    1,
+    &pzemTaskHandle,
+    0
+  );
   
   currentState = STATE_PARENT_MENU;
   drawParentMenu();
@@ -432,7 +486,10 @@ void drawSystemMenu() {
   int days    = (ms / (1000 * 60 * 60 * 24));
 
   lcd.setCursor(0, 0);
-  lcd.print("<0  SYSTEM CORE    ");
+  lcd.print("<0 SYSTEM CORE     ");
+  lcd.setCursor(19, 0);
+  if (WiFi.status() == WL_CONNECTED) lcd.write(0);
+  else lcd.print("!");
   
   for (int i = 0; i < 3; i++) {
     int idx = sysMenuTopIndex + i;
@@ -443,46 +500,44 @@ void drawSystemMenu() {
 
     if (idx == 0) {
       char uptimeStr[20];
-      sprintf(uptimeStr, "UP: %02ldd:%02dh:%02dm", days, hours, minutes);
+      sprintf(uptimeStr, "UP  : %02ldd:%02dh:%02dm", days, hours, minutes);
       lcd.print(uptimeStr);
     } 
     else if (idx == 1) {
-      lcd.print("IP: ");
-      lcd.print(WiFi.localIP().toString().substring(0, 14));
+      lcd.print("IP  : ");
+      lcd.print(WiFi.localIP().toString().substring(0, 13));
     }
     else if (idx == 2) {
       lcd.print("WIFI: ");
-      lcd.write(0);
-      lcd.print(" ");
       lcd.print(rssi);
-      lcd.print(" CH:");
+      lcd.print("dBm (CH");
       lcd.print(WiFi.channel());
+      lcd.print(")");
     }
     else if (idx == 3) {
       lcd.print("CPU : ");
       lcd.print(ESP.getCpuFreqMHz());
-      lcd.print(" MHz");
+      lcd.print(" MHz Dual");
     }
     else if (idx == 4) {
       lcd.print("RAM :");
       drawProgressBar(5, i + 1, 7, ramPercentage); 
-      lcd.setCursor(12, i + 1);
-      lcd.print(" ");
-      lcd.print(100 - ramPercentage);
-      lcd.print("%F");
+      lcd.setCursor(13, i + 1);
+      lcd.print(ramPercentage);
+      lcd.print("%U");
     }
     else if (idx == 5) {
-      lcd.print("MEM : ");
+      lcd.print("HEAP: ");
       lcd.print(freeHeap / 1024);
       lcd.print("/");
       lcd.print(totalHeap / 1024);
-      lcd.print("KB");
+      lcd.print(" KB");
     }
     else if (idx == 6) {
-      lcd.print("TMP : ");
+      lcd.print("TEMP: ");
       lcd.print(tempC);
       lcd.print((char)223); 
-      lcd.print("C");
+      lcd.print("C Core");
     }
   }
 
@@ -495,53 +550,50 @@ void drawSystemMenu() {
 void drawPzemMenu() {
   if (currentState != STATE_MENU_POWER) return;
 
-  float voltage   = pzem.voltage();
-  float current   = pzem.current();
-  float power     = pzem.power();
-  float energy    = pzem.energy();
-  float frequency = pzem.frequency();
-  float pf        = pzem.pf();
+  float voltage   = liveVoltage;
+  float current   = liveCurrent;
+  float power     = livePower;
+  float energy    = liveEnergy;
+  float frequency = liveFrequency;
+  float pf        = livePf;
+  bool isValid    = livePzemValid;
 
-  static float lastValidEnergy = 0.0;
-  if (!isnan(energy) && energy >= 0) lastValidEnergy = energy;
-
-  if (isnan(voltage)) {
-    lcd.setCursor(0, 0); lcd.print("- SENSOR OFF / 0V  -");
-    lcd.setCursor(0, 1); lcd.print("V: 0.0V  | P: 0W    ");
-    lcd.setCursor(0, 2); lcd.print("E:"); printAt(2, 2, String(lastValidEnergy, 2) + "kWh", 8);
-    lcd.setCursor(10, 2); lcd.print("| OFF");
-    lcd.setCursor(0, 3); lcd.print("<0 BACK             ");
+  if (!isValid || voltage < 10.0) {
+    lcd.setCursor(0, 0); lcd.print("<0 POWER MONITOR   !");
+    lcd.setCursor(0, 1); lcd.print("STATUS: STANDBY 0.0V");
+    lcd.setCursor(0, 2); lcd.print("ENERGY: ");
+    printAt(8, 2, String(energy, 2) + " kWh", 12);
+    lcd.setCursor(0, 3); lcd.print("[0]BACK    PZEM:OFFL");
   } else {
-
-    // BARIS 1: Tegangan & Arus
+    // BARIS 0: Tegangan & Arus
     lcd.setCursor(0, 0); lcd.write(0); // Ikon Volt
-    printAt(1, 0, String(voltage, 1) + "V", 9);
-    lcd.setCursor(10, 0); lcd.print("|");
+    printAt(1, 0, String(voltage, 1) + "V", 8);
+    lcd.setCursor(9, 0); lcd.print("|");
     lcd.setCursor(11, 0); lcd.write(1); // Ikon Amp
     printAt(12, 0, String(current, 2) + "A", 8);
 
-    // BARIS 2: Daya & Frekuensi
+    // BARIS 1: Daya & Frekuensi
     lcd.setCursor(0, 1); lcd.write(2); // Ikon Watt
-    printAt(1, 1, String((int)power) + "W", 9);
-    lcd.setCursor(10, 1); lcd.print("|");
+    printAt(1, 1, String((int)power) + "W", 8);
+    lcd.setCursor(9, 1); lcd.print("|");
     lcd.setCursor(11, 1); lcd.print("F:"); 
     printAt(13, 1, String(frequency, 1) + "Hz", 7);
 
-    // BARIS 3: Energi & PF
+    // BARIS 2: Energi & PF
     lcd.setCursor(0, 2); lcd.print("E:");
-    printAt(2, 2, String(energy, 2) + "kWh", 8);
-    lcd.setCursor(10, 2); lcd.print("|");
+    printAt(2, 2, String(energy, 2) + "k", 7);
+    lcd.setCursor(9, 2); lcd.print("|");
     lcd.setCursor(11, 2); lcd.print("PF:");
     printAt(14, 2, String(pf, 2), 6);
 
-    // BARIS 4: Detailed Progress Bar
+    // BARIS 3: Detailed Progress Bar
     float maxPower = 450.0; // Limit daya rumah/alat
     float percent = (power / maxPower) * 100.0;
     percent = constrain(percent, 0, 100);
 
     lcd.setCursor(0, 3);
     lcd.print("<0 ");
-    drawDetailedBarPzem(3, 3, 11, percent); // Menggunakan 11 kolom untuk bar
+    drawDetailedBarPzem(3, 3, 11, percent);
 
     char pctBuf[6];
     snprintf(pctBuf, sizeof(pctBuf), "%3d%%", (int)percent);
@@ -550,75 +602,192 @@ void drawPzemMenu() {
   }
 }
 
+void updateParentStatusBar() {
+  if (currentState != STATE_PARENT_MENU) return;
+  // Baris 0: WiFi (col 0), Time (col 2-6), Mascot (col 8), Suhu (col 10-13), Live Watt (col 15-19)
+  lcd.setCursor(0, 0);
+  if (WiFi.status() == WL_CONNECTED) lcd.write(0);
+  else lcd.print("!");
+
+  lcd.setCursor(2, 0);
+  lcd.print(getLocalTimeStr());
+
+  lcd.setCursor(8, 0);
+  if (animFrame == 1) lcd.write(5);
+  else lcd.write(4);
+
+  // Live Suhu Kota Surakarta (Solo) di sebelah Watt Usage
+  lcd.setCursor(10, 0);
+  if (weatherValid) {
+    char tempBuf[4];
+    snprintf(tempBuf, sizeof(tempBuf), "%2d", (int)round(weatherTemp));
+    lcd.print(tempBuf);
+    lcd.print((char)223); // Simbol derajat °
+    lcd.print("C");
+  } else {
+    lcd.print("--");
+    lcd.print((char)223);
+    lcd.print("C");
+  }
+
+  // Live Watt di pojok kanan
+  lcd.setCursor(15, 0);
+  char wattBuf[6];
+  snprintf(wattBuf, sizeof(wattBuf), "%4dW", (int)livePower);
+  lcd.print(wattBuf);
+}
+
+String getWeatherDescription(int code) {
+  switch (code) {
+    case 0: return "Cerah";
+    case 1: return "Cerah Berawan";
+    case 2: return "Berawan Sbgn";
+    case 3: return "Mendung";
+    case 45: 
+    case 48: return "Berkabut";
+    case 51:
+    case 53:
+    case 55: return "Gerimis";
+    case 61: return "Hujan Ringan";
+    case 63: return "Hujan Sedang";
+    case 65: return "Hujan Lebat";
+    case 80:
+    case 81:
+    case 82: return "Hujan Lokal";
+    case 95:
+    case 96:
+    case 99: return "Badai Petir";
+    default: return "Cerah";
+  }
+}
+
+void fetchWeatherAPI() {
+  if (WiFi.status() != WL_CONNECTED) return;
+
+  HTTPClient http;
+  http.begin(weatherApiUrl);
+  http.setTimeout(3000);
+
+  int httpCode = http.GET();
+  if (httpCode == 200) {
+    String payload = http.getString();
+    DynamicJsonDocument doc(1024);
+    DeserializationError error = deserializeJson(doc, payload);
+    if (!error && doc.containsKey("current")) {
+      weatherTemp     = doc["current"]["temperature_2m"].as<float>();
+      weatherHumidity = doc["current"]["relative_humidity_2m"].as<int>();
+      weatherCode     = doc["current"]["weather_code"].as<int>();
+      weatherWind     = doc["current"]["wind_speed_10m"].as<float>();
+      weatherValid    = true;
+      weatherDesc     = getWeatherDescription(weatherCode);
+      Serial.printf("[WEATHER] Solo: %.1f C, RH: %d%%, Code: %d (%s), Wind: %.1f km/h\n",
+                    weatherTemp, weatherHumidity, weatherCode, weatherDesc.c_str(), weatherWind);
+    }
+  } else {
+    Serial.printf("[WEATHER] HTTP Error: %d\n", httpCode);
+  }
+  http.end();
+}
+
+void drawWeatherMenu() {
+  if (currentState != STATE_MENU_WEATHER) return;
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("<0 SURAKARTA (SOLO)");
+  lcd.setCursor(19, 0);
+  if (WiFi.status() == WL_CONNECTED) lcd.write(0);
+  else lcd.print("!");
+
+  if (!weatherValid) {
+    lcd.setCursor(0, 1);
+    lcd.print("KOTA : SURAKARTA, ID");
+    lcd.setCursor(0, 2);
+    lcd.print("STATUS: MEMUAT DATA ");
+    lcd.setCursor(0, 3);
+    lcd.print("[0]BACK     [5]FETCH");
+  } else {
+    // Baris 1: Suhu & Kelembapan
+    lcd.setCursor(0, 1);
+    lcd.print("SUHU : ");
+    lcd.print(weatherTemp, 1);
+    lcd.print((char)223);
+    lcd.print("C | ");
+    lcd.print(weatherHumidity);
+    lcd.print("%RH");
+
+    // Baris 2: Kecepatan Angin
+    lcd.setCursor(0, 2);
+    lcd.print("ANGIN: ");
+    lcd.print(weatherWind, 1);
+    lcd.print(" km/h");
+
+    // Baris 3: Status Cuaca
+    lcd.setCursor(0, 3);
+    String desc = weatherDesc;
+    if (desc.length() > 12) desc = desc.substring(0, 12);
+    lcd.print("CUACA: ");
+    lcd.print(desc);
+  }
+}
+
 void drawParentMenu() {
-  setupIcons(); // Kembali load Flipper dan Main Parent Icons
+  setParentIcons();
   lcd.clear();
   
-  // Header
-  lcd.setCursor(0, 0);
-  lcd.write(0); // WiFi
-  lcd.print(" GARDEN OS     ");
-  lcd.write(4); // Mascot
-  lcd.print(" ");
-  lcd.setCursor(19, 0);
-  lcd.write(1); // Battery
+  updateParentStatusBar();
   
-  // Clock Area Center
-  lcd.setCursor(7, 1);
-  lcd.print(getLocalTimeStr());
+  // Carousel Card Box
+  lcd.setCursor(2, 1);
+  lcd.print(".----------------.");
   
-  // Main Items Selector
   lcd.setCursor(0, 2);
-  
-  // Kiri
   if (parentMenuCursor > 0) lcd.write(2);
   else lcd.print(" ");
   
-  // Item Name Cenered
+  lcd.setCursor(2, 2);
+  lcd.print("| ");
+  
   String itemName = "";
-  if (parentMenuCursor == 0) itemName = "DEVICES";
-  else if (parentMenuCursor == 1) itemName = "SYSTEM";
-  else if (parentMenuCursor == 2) itemName = "SETTINGS";
-  else itemName = "POWER";
+  if (parentMenuCursor == 0) itemName = " 1. DEVICES ";
+  else if (parentMenuCursor == 1) itemName = " 2. SYSTEM  ";
+  else if (parentMenuCursor == 2) itemName = " 3. WEATHER ";
+  else if (parentMenuCursor == 3) itemName = " 4. SETTINGS";
+  else itemName = " 5. POWER   ";
   
-  int padding = (18 - itemName.length()) / 2;
-  for(int i=0; i<padding; i++) lcd.print(" ");
   lcd.print(itemName);
-  for(int i=0; i<(18 - padding - itemName.length()); i++) lcd.print(" ");
+  lcd.print(" |");
   
-  // Kanan
+  lcd.setCursor(19, 2);
   if (parentMenuCursor < PARENT_ITEM_COUNT - 1) lcd.write(3);
   else lcd.print(" ");
   
-  lcd.setCursor(2, 3);
-  lcd.print("4");
-  lcd.write(2); 
-  
-  lcd.setCursor(7, 3);
-  lcd.print("5 SEL");
-  
-  lcd.setCursor(15, 3);
-  lcd.print("6");
-  lcd.write(3); 
+  // Keypad Helper
+  lcd.setCursor(1, 3);
+  lcd.print("[4]<   [5]OK   [6]>");
 }
 
 void drawSettingsMenu() {
   setMenuIcons();
   lcd.clear();
   lcd.setCursor(0, 0);
-  lcd.print("<0  SETTINGS       ");
+  lcd.print("<0 SETTINGS        ");
   lcd.setCursor(19, 0);
-  lcd.write(1); // Ikon battery dummy/sisa
+  if (WiFi.status() == WL_CONNECTED) lcd.write(0);
+  else lcd.print("!");
   
   lcd.setCursor(0, 1);
   if (settingsCursor == 0) lcd.write(6); else lcd.print(" ");
-  lcd.print(" SCR SAVER: ");
-  lcd.print(ssEnabled ? "ON " : "OFF");
+  lcd.print(" SCR SAVER : ");
+  lcd.print(ssEnabled ? "[ON ]" : "[OFF]");
   
   lcd.setCursor(0, 2);
   if (settingsCursor == 1) lcd.write(6); else lcd.print(" ");
-  lcd.print(" SS TYPE  : ");
-  lcd.print(ssType == 0 ? "TIME" : "EYE ");
+  lcd.print(" SS STYLE  : ");
+  lcd.print(ssType == 0 ? "[TIME]" : "[EYE ]");
+
+  lcd.setCursor(0, 3);
+  lcd.print("[0]BACK     [5]TOGGLE");
 }
 
 const char* scrEyeFaces[] = {"  (O)   (O)  ", "  (-)   (-)  ", "  (>)   (<)  ", "  (^)   (^)  ", "  (o)   (o)  ", "  (@)   (@)  ", "  (~)   (~)  ", "  (X)   (X)  "};
@@ -626,8 +795,25 @@ const char* scrEyeFaces[] = {"  (O)   (O)  ", "  (-)   (-)  ", "  (>)   (<)  ", 
 void drawScreenSaver() {
   lcd.clear();
   if (ssType == 0) { // TIME
-     targetBrightness = 10; // Redup minimal
+     targetBrightness = 15; // Redup minimal
      setLcdBrightness(targetBrightness);
+     
+     // Status bar
+     lcd.setCursor(0, 0);
+     if (weatherValid) {
+       lcd.print("SOLO ");
+       lcd.print(weatherTemp, 1);
+       lcd.print((char)223);
+       lcd.print("C");
+     } else {
+       lcd.print("SHERATON");
+     }
+     lcd.setCursor(14, 0);
+     char wattBuf[7];
+     snprintf(wattBuf, sizeof(wattBuf), "%4dW", (int)livePower);
+     lcd.print(wattBuf);
+
+     // Jam besar centered
      lcd.setCursor((20 - 5) / 2, 1);
      struct tm timeinfo;
      if(!getLocalTime(&timeinfo)){
@@ -638,14 +824,22 @@ void drawScreenSaver() {
         else strftime(timeStringBuff, sizeof(timeStringBuff), "%H %M", &timeinfo);
         lcd.print(timeStringBuff);
      }
+
+     lcd.setCursor(2, 2);
+     lcd.print("[ GARDEN_OS v4 ]");
+
+     lcd.setCursor(2, 3);
+     lcd.print("Press Any Key...");
   } else {           // EYE
-     targetBrightness = 200; // Normal brightness
+     targetBrightness = 255; // Normal full brightness
      setLcdBrightness(targetBrightness);
      int faceIdx = random(0, 8);
-     int offsetX = random(0, 6);
-     int offsetY = random(0, 4);
+     int offsetX = random(1, 5);
+     int offsetY = random(0, 3);
      lcd.setCursor(offsetX, offsetY);
      lcd.print(scrEyeFaces[faceIdx]);
+     lcd.setCursor(1, 3);
+     lcd.print("< Press Any Key >");
   }
 }
 
@@ -653,31 +847,50 @@ void drawMenu() {
   setMenuIcons();
   lcd.clear();
 
+  // Header
   lcd.setCursor(0, 0);
-  lcd.print("<0  DEVICES (");
+  lcd.print("<0 DEVICES (");
   lcd.print(totalLampu);
-  lcd.print(")  ");
+  lcd.print(")");
   lcd.setCursor(19, 0);
-  lcd.write(1);
+  if (WiFi.status() == WL_CONNECTED) lcd.write(0);
+  else lcd.print("!");
 
+  // List Items
   for (int i = 0; i < 3; i++) {
     int itemIdx = menuTopIndex + i; 
     lcd.setCursor(0, i + 1);
 
     if (itemIdx < totalLampu) {
-      if (itemIdx == menuCursor) lcd.write(6); 
+      if (itemIdx == menuCursor) lcd.write(6); // Selector arrow
       else lcd.print(" ");
 
-      lcd.print(" ");
+      lcd.print(itemIdx + 1);
+      lcd.print(".");
+
       String nama = daftarLampu[itemIdx].deskripsi;
-      if (nama.length() > 16) nama = nama.substring(0, 16);
+      if (nama.length() > 9) nama = nama.substring(0, 9);
       lcd.print(nama);
+
+      // Padding nama
+      for (int s = nama.length(); s < 9; s++) lcd.print(" ");
+
+      // State Badge
+      if (daftarLampu[itemIdx].state) {
+        lcd.print("[ON ]");
+      } else {
+        lcd.print("[OFF]");
+      }
+    } else {
+      lcd.print("                   ");
     }
   }
 
+  // Scroll Indicators
   lcd.setCursor(19, 1);
   if (menuTopIndex > 0) lcd.write(2);
   else lcd.print(" ");
+  
   lcd.setCursor(19, 3);
   if (menuTopIndex + 3 < totalLampu) lcd.write(3);
   else lcd.print(" ");
@@ -687,69 +900,68 @@ void drawControlInit() {
   setControlIcons();
   lcd.clear();
 
+  // Header Bar
   lcd.setCursor(0, 0);
-  lcd.print("<0    ST:");
-  if (daftarLampu[controlIndex].state) lcd.write(3);  
-  else lcd.write(2);                                  
-
-  lcd.setCursor(12, 0);
-  setupIcons(); // Ensure maskot is loaded temporarily
-  lcd.write(4);  
-  setControlIcons(); // Revert back custom icons
+  lcd.print("<0 CONTROL");
+  lcd.setCursor(13, 0);
+  if (daftarLampu[controlIndex].state) lcd.write(3); // Ikon lampu nyala
+  else lcd.write(2);                                // Ikon lampu mati
+  lcd.setCursor(16, 0);
+  lcd.write(4); // Mascot
   lcd.setCursor(19, 0);
-  lcd.write(1);  
+  if (WiFi.status() == WL_CONNECTED) lcd.write(0);
+  else lcd.print("!");
 
+  // Line 1: Scroller (Device Name)
+  scrollPos = 0;
+  drawControlScroller();
+
+  // Line 2: Status & Mode Badges
   lcd.setCursor(0, 2);
+  if (daftarLampu[controlIndex].state) lcd.print("PWR:[ ON ]");
+  else lcd.print("PWR:[OFF ]");
+
+  lcd.print(" | ");
   String md = daftarLampu[controlIndex].mode;
   if (md == "MANUAL") {
-    lcd.print("MD: MANUAL        ");
+    lcd.print("MD:MAN");
   } else if (md == "AUTO_SUN") {
-    lcd.print("MD: AUTO (LDR)    ");
+    lcd.print("MD:SUN");
   } else if (md == "AUTO_DATETIME") {
-    lcd.print("TM:");
     if (daftarLampu[controlIndex].turnOnTime.length() >= 5) {
-      lcd.print(daftarLampu[controlIndex].turnOnTime.substring(0, 5));
+      lcd.print(daftarLampu[controlIndex].turnOnTime.substring(0, 2));
       lcd.print("-");
-      lcd.print(daftarLampu[controlIndex].turnOffTime.substring(0, 5));
+      lcd.print(daftarLampu[controlIndex].turnOffTime.substring(0, 2));
     } else {
-      lcd.print("NOT SET    ");
+      lcd.print("MD:TIM");
     }
   }
 
+  // Line 3: Actions Helper
   lcd.setCursor(0, 3);
-  lcd.print(" *");
-  lcd.write(2);  
-  lcd.print("  #");
-  lcd.write(3);  
-  lcd.print("  5MD  1TM");
-
-  scrollPos = 0;
-  drawControlScroller();
+  lcd.print("[*OFF][#ON] [5]MD [1]");
 }
 
 void drawControlScroller() {
   if (currentState != STATE_CONTROL) return;
 
   lcd.setCursor(0, 1);
-  lcd.print(" ");
-
   String nama = daftarLampu[controlIndex].deskripsi;
 
-  if (nama.length() <= 18) {
-    int spaces = (18 - nama.length()) / 2;
+  if (nama.length() <= 20) {
+    int spaces = (20 - nama.length()) / 2;
     for (int i = 0; i < spaces; i++) lcd.print(" ");
     lcd.print(nama);
-    for (int i = 0; i < (18 - spaces - nama.length()); i++) lcd.print(" ");
+    for (int i = 0; i < (20 - spaces - nama.length()); i++) lcd.print(" ");
   } else {
     String paddedName = nama + "    ";
     int len = paddedName.length();
     String view = "";
-    for (int i = 0; i < 18; i++) {
+    for (int i = 0; i < 20; i++) {
       view += paddedName[(scrollPos + i) % len];
     }
     lcd.print(view);
   }
-  lcd.print(" ");
 }
 
 void drawTimeInputScreen(String title) {
@@ -757,15 +969,17 @@ void drawTimeInputScreen(String title) {
   lcd.setCursor((20 - title.length()) / 2, 0);
   lcd.print(title);
 
-  lcd.setCursor(0, 3);
-  lcd.print(" *  BACK / DELETE");
-
-  lcd.setCursor(7, 2);
+  lcd.setCursor(6, 2);
+  lcd.print("[ ");
   for (int i = 0; i < 4; i++) {
     if (i == 2) lcd.print(":");
     if (i < timeInputBuffer.length()) lcd.print(timeInputBuffer[i]);
     else lcd.print("-");
   }
+  lcd.print(" ]");
+
+  lcd.setCursor(0, 3);
+  lcd.print("[*]DEL/BACK  [#]SAVE");
 }
 
 // ================= HARDWARE & API LOGIC =================
@@ -776,6 +990,7 @@ void controlLampuAPI(int idx, String mode, bool state, String turnOnT, String tu
   HTTPClient http;
   http.begin(updateUrl + daftarLampu[idx].id);
   http.addHeader("Content-Type", "application/json");
+  http.setTimeout(1500);
 
   StaticJsonDocument<256> body;
   body["state"] = state;
@@ -962,135 +1177,71 @@ void sendPzemDataToServer(float v, float a, float p, float e, float f, float pf)
   }
 }
 
+// Background FreeRTOS Task pinned to Core 0 for PZEM reading & HTTP sending & Weather
+void pzemBackgroundTask(void *pvParameters) {
+  static unsigned long lastWeatherFetchTime = 0;
+  
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      // 1. Baca & Kirim PZEM
+      float voltage   = pzem.voltage();
+      float current   = pzem.current();
+      float power     = pzem.power();
+      float energy    = pzem.energy();
+      float frequency = pzem.frequency();
+      float pf        = pzem.pf();
+
+      static float lastValidEnergy = 0.0;
+      if (!isnan(energy) && energy >= 0) {
+        lastValidEnergy = energy;
+      }
+
+      if (isnan(voltage)) {
+        liveVoltage   = 0.0;
+        liveCurrent   = 0.0;
+        livePower     = 0.0;
+        liveFrequency = 0.0;
+        livePf        = 0.0;
+        liveEnergy    = lastValidEnergy;
+        livePzemValid = false;
+      } else {
+        liveVoltage   = voltage;
+        liveCurrent   = isnan(current) ? 0.0 : current;
+        livePower     = isnan(power) ? 0.0 : power;
+        liveEnergy    = isnan(energy) ? lastValidEnergy : energy;
+        liveFrequency = isnan(frequency) ? 0.0 : frequency;
+        livePf        = isnan(pf) ? 0.0 : pf;
+        livePzemValid = true;
+      }
+
+      Serial.printf("[DEBUG PZEM] V: %.1f V | A: %.3f A | W: %.1f W | E: %.3f kWh | F: %.1f Hz | PF: %.2f\n",
+                    liveVoltage, liveCurrent, livePower, liveEnergy, liveFrequency, livePf);
+      sendPzemDataToServer(liveVoltage, liveCurrent, livePower, liveEnergy, liveFrequency, livePf);
+
+      // 2. Fetch Cuaca Open-Meteo di background (pertama kali saat boot & auto-refresh setiap 10 menit)
+      if (millis() - lastWeatherFetchTime > (weatherValid ? 600000 : 30000) || lastWeatherFetchTime == 0) {
+        fetchWeatherAPI();
+        lastWeatherFetchTime = millis();
+      }
+    }
+    vTaskDelay(2000 / portTICK_PERIOD_MS);
+  }
+}
+
 
 // ================= MAIN LOOP =================
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // SCREEN SAVER TIMEOUT TRIGGER
-  if (!isScreenSaverActive && ssEnabled && currentState != STATE_BOOT && currentState != STATE_SCREEN_SAVER) {
-    if (currentMillis - lastKeyPressTime > SCREEN_SAVER_TIMEOUT) {
-      isScreenSaverActive = true;
-      currentState = STATE_SCREEN_SAVER;
-      drawScreenSaver();
-    }
-  }
-
-  updateSmoothBrightness();
-  
-  // Realtime Clock & Mascot Updater di Parent Menu
-  if (currentState == STATE_PARENT_MENU) {
-    if(currentMillis - lastClockUpdate > 500) { 
-       lcd.setCursor(7, 1);
-       lcd.print(getLocalTimeStr()); 
-       lastClockUpdate = currentMillis;
-    }
-
-    if (currentMillis - lastAnimTime > 800) {
-      animFrame = (animFrame + 1) % 4;
-      lcd.setCursor(15, 0);
-      if (animFrame == 1) lcd.write(5); 
-      else lcd.write(4);
-      lastAnimTime = currentMillis;
-    }
-  }
-  
-  // Realtime System Resource Updater di System Menu
-  if (currentState == STATE_MENU_SYSTEM) {
-    if(currentMillis - lastSystemUpdate > 1000) { 
-       drawSystemMenu(); 
-       lastSystemUpdate = currentMillis;
-    }
-  }
-
-  // Realtime PZEM Display Updater di Power Menu
-  if (currentState == STATE_MENU_POWER) {
-    if(currentMillis - lastPzemUpdate > 500) {
-       drawPzemMenu();
-       lastPzemUpdate = currentMillis;
-    }
-  }
-
-  if (currentState == STATE_SCREEN_SAVER) {
-    if (currentMillis - lastAnimTime > (ssType == 0 ? 1000 : 2500)) { 
-       drawScreenSaver();
-       lastAnimTime = currentMillis;
-    }
-  }
-
-  if (currentState == STATE_CONTROL) {
-    if (currentMillis - lastAnimTime > 800) {
-      animFrame = (animFrame + 1) % 4;
-      setupIcons();
-      lcd.setCursor(12, 0);
-      if (animFrame == 1) lcd.write(5);
-      else lcd.write(4);
-      setControlIcons();
-      lastAnimTime = currentMillis;
-    }
-
-    if (currentMillis - lastScrollTime > 300) {
-      if (totalLampu > 0 && daftarLampu[controlIndex].deskripsi.length() > 18) {
-        String nama = daftarLampu[controlIndex].deskripsi + "    ";
-        scrollPos = (scrollPos + 1) % nama.length();
-        drawControlScroller();
-      }
-      lastScrollTime = currentMillis;
-    }
-  }
-
-  if (currentMillis - lastLDRCheck > 2000) {
-    checkLDR();
-    lastLDRCheck = currentMillis;
-  }
-
-  // PZEM Background API Sender
-  if (currentMillis - lastPzemSendTime > pzemSendInterval) {
-    float voltage   = pzem.voltage();
-    float current   = pzem.current();
-    float power     = pzem.power();
-    float energy    = pzem.energy();
-    float frequency = pzem.frequency();
-    float pf        = pzem.pf();
-
-    // Simpan nilai energy terakhir yang valid agar akumulasi kWh tidak hilang saat mati listrik
-    static float lastValidEnergy = 0.0;
-    if (!isnan(energy) && energy >= 0) {
-      lastValidEnergy = energy;
-    }
-
-    // Jika sensor mati / error / listrik padam (isnan(voltage)), set ke 0.0V & 0W tapi TETAP kirim data ke server
-    if (isnan(voltage)) {
-      voltage   = 0.0;
-      current   = 0.0;
-      power     = 0.0;
-      frequency = 0.0;
-      pf        = 0.0;
-      energy    = lastValidEnergy;
-    } else {
-      if (isnan(current))   current   = 0.0;
-      if (isnan(power))     power     = 0.0;
-      if (isnan(energy))    energy    = lastValidEnergy;
-      if (isnan(frequency)) frequency = 0.0;
-      if (isnan(pf))        pf        = 0.0;
-    }
-
-    // Selalu kirim data ke server (bahkan saat 0V / mati listrik) agar backend dapat mencatat log matlis
-    Serial.printf("[DEBUG PZEM] V: %.1f V | A: %.3f A | W: %.1f W | E: %.3f kWh | F: %.1f Hz | PF: %.2f\n",
-                  voltage, current, power, energy, frequency, pf);
-    sendPzemDataToServer(voltage, current, power, energy, frequency, pf);
-    lastPzemSendTime = currentMillis;
-  }
-
-
+  // 1. KEYPAD INSTANT SCAN FIRST (Prioritas Utama di Core 1)
   char key = keypad.getKey();
   if (key) {
     lastKeyPressTime = currentMillis; // RESET TIMER
     
     if (isScreenSaverActive) {
       isScreenSaverActive = false;
-      targetBrightness = 200;
+      targetBrightness = 255;
       setLcdBrightness(targetBrightness);
       playTransition();
       currentState = STATE_PARENT_MENU;
@@ -1124,16 +1275,35 @@ void loop() {
            drawSystemMenu();
          } else if (parentMenuCursor == 2) {
            playTransition();
+           currentState = STATE_MENU_WEATHER;
+           lcd.clear();
+           drawWeatherMenu();
+         } else if (parentMenuCursor == 3) {
+           playTransition();
            settingsCursor = 0;
            currentState = STATE_MENU_SETTINGS;
            drawSettingsMenu();
-         } else if (parentMenuCursor == 3) {
+         } else if (parentMenuCursor == 4) {
            playTransition();
            setPzemIcons();
            currentState = STATE_MENU_POWER;
            lcd.clear();
            drawPzemMenu();
          }
+      }
+    }
+    
+    // --- LAYAR MENU WEATHER ---
+    else if (currentState == STATE_MENU_WEATHER) {
+      if (key == '0') {
+        playTransition();
+        currentState = STATE_PARENT_MENU;
+        drawParentMenu();
+      } else if (key == '5') {
+        lcd.setCursor(0, 3);
+        lcd.print("SYNCING WEATHER...  ");
+        fetchWeatherAPI();
+        drawWeatherMenu();
       }
     }
     
@@ -1270,11 +1440,11 @@ void loop() {
             tempTurnOnTime = timeInputBuffer.substring(0, 2) + ":" + timeInputBuffer.substring(2, 4);
             timeInputBuffer = "";
             currentState = STATE_INPUT_TIME_OFF;
-            delay(300);  
+            delay(150);  
             drawTimeInputScreen("SET OFF TIME");
           } else {
             String tempTurnOffTime = timeInputBuffer.substring(0, 2) + ":" + timeInputBuffer.substring(2, 4);
-            delay(300);  
+            delay(150);  
 
             controlLampuAPI(controlIndex, "AUTO_DATETIME", daftarLampu[controlIndex].state, tempTurnOnTime, tempTurnOffTime);
 
@@ -1286,5 +1456,81 @@ void loop() {
         }
       }
     } 
+  }
+
+  // SCREEN SAVER TIMEOUT TRIGGER
+  if (!isScreenSaverActive && ssEnabled && currentState != STATE_BOOT && currentState != STATE_SCREEN_SAVER) {
+    if (currentMillis - lastKeyPressTime > SCREEN_SAVER_TIMEOUT) {
+      isScreenSaverActive = true;
+      currentState = STATE_SCREEN_SAVER;
+      drawScreenSaver();
+    }
+  }
+
+  updateSmoothBrightness();
+  
+  // Realtime Clock & Mascot Updater di Parent Menu
+  if (currentState == STATE_PARENT_MENU) {
+    if(currentMillis - lastClockUpdate > 500) { 
+       updateParentStatusBar();
+       lastClockUpdate = currentMillis;
+    }
+
+    if (currentMillis - lastAnimTime > 800) {
+      animFrame = (animFrame + 1) % 4;
+      lcd.setCursor(8, 0);
+      if (animFrame == 1) lcd.write(5); 
+      else lcd.write(4);
+      lastAnimTime = currentMillis;
+    }
+  }
+  
+  // Realtime System Resource Updater di System Menu
+  if (currentState == STATE_MENU_SYSTEM) {
+    if(currentMillis - lastSystemUpdate > 1000) { 
+       drawSystemMenu(); 
+       lastSystemUpdate = currentMillis;
+    }
+  }
+
+  // Realtime PZEM Display Updater di Power Menu (Membaca live cached data tanpa blocking Modbus)
+  if (currentState == STATE_MENU_POWER) {
+    if(currentMillis - lastPzemUpdate > 500) {
+       drawPzemMenu();
+       lastPzemUpdate = currentMillis;
+    }
+  }
+
+  if (currentState == STATE_SCREEN_SAVER) {
+    if (currentMillis - lastAnimTime > (ssType == 0 ? 1000 : 2500)) { 
+       drawScreenSaver();
+       lastAnimTime = currentMillis;
+    }
+  }
+
+  if (currentState == STATE_CONTROL) {
+    if (currentMillis - lastAnimTime > 800) {
+      animFrame = (animFrame + 1) % 4;
+      setupIcons();
+      lcd.setCursor(12, 0);
+      if (animFrame == 1) lcd.write(5);
+      else lcd.write(4);
+      setControlIcons();
+      lastAnimTime = currentMillis;
+    }
+
+    if (currentMillis - lastScrollTime > 300) {
+      if (totalLampu > 0 && daftarLampu[controlIndex].deskripsi.length() > 18) {
+        String nama = daftarLampu[controlIndex].deskripsi + "    ";
+        scrollPos = (scrollPos + 1) % nama.length();
+        drawControlScroller();
+      }
+      lastScrollTime = currentMillis;
+    }
+  }
+
+  if (currentMillis - lastLDRCheck > 2000) {
+    checkLDR();
+    lastLDRCheck = currentMillis;
   }
 }

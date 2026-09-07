@@ -8,7 +8,10 @@ const handleDataPzemSocket = (ws, req) => {
     
     log.info("Client connected to PZEM socket");
 
+    let isSending = false;
     const sendData = async () => {
+        if (isSending) return;
+        isSending = true;
         try {
             const data = await sendPzem();
             if (ws.readyState === ws.OPEN) {
@@ -16,13 +19,15 @@ const handleDataPzemSocket = (ws, req) => {
             }
         } catch (error) {
             log.error("Error sending data", error);
+        } finally {
+            isSending = false;
         }
     };
 
     // Kirim data awal
     sendData();
 
-    // Polling setiap 1 detik (sesuaikan interval jika perlu)
+    // Polling setiap 1 detik
     const interval = setInterval(sendData, 1000);
 
     ws.on("close", () => {

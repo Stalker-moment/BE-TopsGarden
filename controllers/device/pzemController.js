@@ -525,6 +525,11 @@ const formatDateWIB = (date) => {
     }).format(new Date(date));
 };
 
+// In-memory cache for daily usage: key -> { data, expiresAt }
+const dailyUsageCache = new Map();
+const DAILY_CACHE_TTL_CURRENT = 30 * 1000; // 30s for current month
+const DAILY_CACHE_TTL_PAST = 3600 * 1000; // 1h for past months
+
 router.get("/pzem/:id/daily-usage", async (req, res) => {
     try {
         const { id } = req.params;
@@ -532,65 +537,160 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
         const year = Number(req.query.year) || now.getFullYear();
         const month = Number(req.query.month) || (now.getMonth() + 1); // 1-based
 
+        const cacheKey = `${id}-${year}-${month}`;
+        const cached = dailyUsageCache.get(cacheKey);
+        if (cached && Date.now() < cached.expiresAt) {
+            return res.json(cached.data);
+        }
+
+        const nowWIB = new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jakarta" }));
+        const curYear = nowWIB.getFullYear();
+        const curMonth = nowWIB.getMonth() + 1;
+        const curDay = nowWIB.getDate();
+
+        const isCurrentMonth = (year === curYear && month === curMonth);
+        const isFutureMonth = (year > curYear || (year === curYear && month > curMonth));
+        const daysInMonth = new Date(year, month, 0).getDate();
+        const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
+
+        if (isFutureMonth) {
+            const emptyDays = Array.from({ length: daysInMonth }, (_, i) => {
+                const dayNum = i + 1;
+                const dDate = new Date(year, month - 1, dayNum);
+                return {
+                    date: dDate,
+                    dateLabel: dDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' }),
+                    usageKwh: 0,
+                    avgVoltage: 0,
+                    avgCurrent: 0,
+                    energyKwh: 0,
+                    isResetDay: false
+                };
+            });
+            const responseData = {
+                year,
+                month,
+                totalKwh: 0,
+                estimatedCost: 0,
+                plnRate: PLN_RATE,
+                days: emptyDays
+            };
+            dailyUsageCache.set(cacheKey, { data: responseData, expiresAt: Date.now() + DAILY_CACHE_TTL_PAST });
+            return res.json(responseData);
+        }
+
         if (id === "all") {
             const activeDevices = await prisma.pzemDevice.findMany({ where: { isActive: true } });
-            
+            if (activeDevices.length === 0) {
+                return res.json({
+                    year,
+                    month,
+                    totalKwh: 0,
+                    estimatedCost: 0,
+                    plnRate: PLN_RATE,
+                    days: []
+                });
+            }
+
+            const deviceIds = activeDevices.map(d => d.id);
+            const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0);
+            const endDate = new Date(year, month, 1, 23, 59, 59, 999);
+
+            // Fetch snapshots for all active devices in a single batch query
+            const snapshots = await prisma.pzemDailySnapshot.findMany({
+                where: { deviceId: { in: deviceIds }, date: { gte: startDate, lte: endDate } },
+                orderBy: { date: 'asc' }
+            });
+
+            // Group snapshots by deviceId and targetDayNum
+            const snapshotsByDevice = {};
+            for (const devId of deviceIds) {
+                snapshotsByDevice[devId] = {};
+            }
+            for (const s of snapshots) {
+                const dateStr = formatDateWIB(s.date);
+                const [sy, sm, sd] = dateStr.split('-').map(Number);
+                const targetDate = new Date(sy, sm - 1, sd);
+                targetDate.setDate(targetDate.getDate() - 1);
+                if (targetDate.getFullYear() === year && (targetDate.getMonth() + 1) === month) {
+                    if (snapshotsByDevice[s.deviceId]) {
+                        snapshotsByDevice[s.deviceId][targetDate.getDate()] = s;
+                    }
+                }
+            }
+
+            // Calculate each device's daily list
             const devicesDaily = await Promise.all(
                 activeDevices.map(async d => {
-                    const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0);
-                    const endDate = new Date(year, month, 1, 23, 59, 59, 999);
-                    const snapshots = await prisma.pzemDailySnapshot.findMany({
-                        where: { deviceId: d.id, date: { gte: startDate, lte: endDate } },
-                        orderBy: { date: 'asc' }
-                    });
-                    
-                    const dayMap = {};
-                    for (const s of snapshots) {
-                        const dateStr = formatDateWIB(s.date);
-                        const [sy, sm, sd] = dateStr.split('-').map(Number);
-                        const targetDate = new Date(sy, sm - 1, sd);
-                        targetDate.setDate(targetDate.getDate() - 1);
-                        if (targetDate.getFullYear() === year && (targetDate.getMonth() + 1) === month) {
-                            dayMap[targetDate.getDate()] = s;
-                        }
-                    }
-                    
-                    const daysInMonth = new Date(year, month, 0).getDate();
-                    const allDays = Array.from({ length: daysInMonth }, (_, i) => i + 1);
-                    const fallbacks = await Promise.all(
-                        allDays.map(dayNum => {
+                    const devSnapMap = snapshotsByDevice[d.id] || {};
+                    const list = [];
+
+                    for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
+                        const isFutureDay = isCurrentMonth && dayNum > curDay;
+                        const isToday = isCurrentMonth && dayNum === curDay;
+                        const s = devSnapMap[dayNum];
+
+                        if (isFutureDay) {
+                            list.push({
+                                day: dayNum,
+                                usageKwh: 0,
+                                avgVoltage: 0,
+                                avgCurrent: 0,
+                                energyKwh: 0,
+                                isResetDay: false
+                            });
+                        } else if (isToday) {
+                            // Calculate live metrics for today only
                             const dStart = new Date(year, month - 1, dayNum, 0, 0, 0);
                             const dEnd = new Date(year, month - 1, dayNum, 23, 59, 59);
-                            return calculateDailyMetricsFast(d.id, dStart, dEnd);
-                        })
-                    );
-                    
-                    const list = [];
-                    for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
-                        const s = dayMap[dayNum];
-                        const fb = fallbacks[dayNum - 1];
-                        list.push({
-                            day: dayNum,
-                            usageKwh: s?.deltaKwh ?? fb.usageKwh,
-                            avgVoltage: fb.avgVoltage,
-                            avgCurrent: fb.avgCurrent,
-                        });
+                            const live = await calculateDailyMetricsFast(d.id, dStart, dEnd);
+                            list.push({
+                                day: dayNum,
+                                usageKwh: live.usageKwh,
+                                avgVoltage: live.avgVoltage,
+                                avgCurrent: live.avgCurrent,
+                                energyKwh: 0,
+                                isResetDay: false
+                            });
+                        } else if (s) {
+                            // Snapshot exists for this past day — use it directly without heavy log querying
+                            list.push({
+                                day: dayNum,
+                                usageKwh: s.deltaKwh ?? 0,
+                                avgVoltage: (s.deltaKwh && s.deltaKwh > 0) ? 220 : 0,
+                                avgCurrent: 0,
+                                energyKwh: s.energyKwh ?? 0,
+                                isResetDay: s.isResetDay ?? false
+                            });
+                        } else {
+                            // Past day without snapshot (rare fallback)
+                            const dStart = new Date(year, month - 1, dayNum, 0, 0, 0);
+                            const dEnd = new Date(year, month - 1, dayNum, 23, 59, 59);
+                            const fb = await calculateDailyMetricsFast(d.id, dStart, dEnd);
+                            list.push({
+                                day: dayNum,
+                                usageKwh: fb.usageKwh,
+                                avgVoltage: fb.avgVoltage,
+                                avgCurrent: fb.avgCurrent,
+                                energyKwh: 0,
+                                isResetDay: false
+                            });
+                        }
                     }
                     return list;
                 })
             );
-            
-            const daysInMonth = new Date(year, month, 0).getDate();
+
             const aggregatedDays = [];
             for (let dayNum = 1; dayNum <= daysInMonth; dayNum++) {
                 const dDate = new Date(year, month - 1, dayNum);
                 const dateLabel = dDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
-                
+
                 let dayUsageKwh = 0;
                 let sumVoltage = 0;
                 let sumCurrent = 0;
                 let activeCount = 0;
-                
+
                 for (const dDaily of devicesDaily) {
                     const item = dDaily[dayNum - 1];
                     if (item) {
@@ -600,7 +700,7 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
                         if (item.avgVoltage > 0) activeCount += 1;
                     }
                 }
-                
+
                 aggregatedDays.push({
                     date: dDate,
                     dateLabel,
@@ -611,22 +711,25 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
                     isResetDay: false
                 });
             }
-            
+
             const totalKwh = aggregatedDays.reduce((sum, d) => sum + d.usageKwh, 0);
-            const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
-            
-            return res.json({
+            const responseData = {
                 year,
                 month,
                 totalKwh: parseFloat(totalKwh.toFixed(3)),
                 estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
                 plnRate: PLN_RATE,
                 days: aggregatedDays
-            });
+            };
+
+            const ttl = isCurrentMonth ? DAILY_CACHE_TTL_CURRENT : DAILY_CACHE_TTL_PAST;
+            dailyUsageCache.set(cacheKey, { data: responseData, expiresAt: Date.now() + ttl });
+
+            return res.json(responseData);
         }
 
+        // Single device query
         const startDate = new Date(year, month - 1, 1, 0, 0, 0, 0);
-        // Load up to the 1st of the next month to get the next day's snapshot for the last day of this month
         const endDate = new Date(year, month, 1, 23, 59, 59, 999);
 
         const snapshots = await prisma.pzemDailySnapshot.findMany({
@@ -641,57 +744,85 @@ router.get("/pzem/:id/daily-usage", async (req, res) => {
         for (const s of snapshots) {
             const dateStr = formatDateWIB(s.date);
             const [y, m, d] = dateStr.split('-').map(Number);
-            
-            // The snapshot on date D (start of day D) contains the delta for day D-1
             const targetDate = new Date(y, m - 1, d);
             targetDate.setDate(targetDate.getDate() - 1);
-            
+
             if (targetDate.getFullYear() === year && (targetDate.getMonth() + 1) === month) {
-                const targetDayNum = targetDate.getDate();
-                dayMap[targetDayNum] = s;
+                dayMap[targetDate.getDate()] = s;
             }
         }
-
-        const daysInMonth = new Date(year, month, 0).getDate();
-        const allDays = Array.from({ length: daysInMonth }, (_, i) => i + 1);
-
-        const fallbackResults = await Promise.all(
-            allDays.map(d => {
-                const dStart = new Date(year, month - 1, d, 0, 0, 0);
-                const dEnd = new Date(year, month - 1, d, 23, 59, 59);
-                return calculateDailyMetricsFast(id, dStart, dEnd);
-            })
-        );
 
         const result = [];
         for (let d = 1; d <= daysInMonth; d++) {
             const dDate = new Date(year, month - 1, d);
             const dateLabel = dDate.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
+            const isFutureDay = isCurrentMonth && d > curDay;
+            const isToday = isCurrentMonth && d === curDay;
             const s = dayMap[d];
-            const fb = fallbackResults[d - 1] || { usageKwh: 0, avgVoltage: 0, avgCurrent: 0 };
 
-            result.push({
-                date: s ? s.date : dDate,
-                dateLabel,
-                usageKwh: s?.deltaKwh ?? fb.usageKwh,
-                avgVoltage: fb.avgVoltage,
-                avgCurrent: fb.avgCurrent,
-                energyKwh: s?.energyKwh ?? 0,
-                isResetDay: s?.isResetDay ?? false,
-            });
+            if (isFutureDay) {
+                result.push({
+                    date: dDate,
+                    dateLabel,
+                    usageKwh: 0,
+                    avgVoltage: 0,
+                    avgCurrent: 0,
+                    energyKwh: 0,
+                    isResetDay: false,
+                });
+            } else if (isToday) {
+                const dStart = new Date(year, month - 1, d, 0, 0, 0);
+                const dEnd = new Date(year, month - 1, d, 23, 59, 59);
+                const live = await calculateDailyMetricsFast(id, dStart, dEnd);
+                result.push({
+                    date: dDate,
+                    dateLabel,
+                    usageKwh: live.usageKwh,
+                    avgVoltage: live.avgVoltage,
+                    avgCurrent: live.avgCurrent,
+                    energyKwh: 0,
+                    isResetDay: false,
+                });
+            } else if (s) {
+                result.push({
+                    date: s.date || dDate,
+                    dateLabel,
+                    usageKwh: s.deltaKwh ?? 0,
+                    avgVoltage: (s.deltaKwh && s.deltaKwh > 0) ? 220 : 0,
+                    avgCurrent: 0,
+                    energyKwh: s.energyKwh ?? 0,
+                    isResetDay: s.isResetDay ?? false,
+                });
+            } else {
+                const dStart = new Date(year, month - 1, d, 0, 0, 0);
+                const dEnd = new Date(year, month - 1, d, 23, 59, 59);
+                const fb = await calculateDailyMetricsFast(id, dStart, dEnd);
+                result.push({
+                    date: dDate,
+                    dateLabel,
+                    usageKwh: fb.usageKwh,
+                    avgVoltage: fb.avgVoltage,
+                    avgCurrent: fb.avgCurrent,
+                    energyKwh: 0,
+                    isResetDay: false,
+                });
+            }
         }
 
         const totalKwh = result.reduce((sum, d) => sum + (d.usageKwh || 0), 0);
-        const PLN_RATE = Number(process.env.PLN_RATE_PER_KWH || 1444.70);
-
-        res.json({
+        const responseData = {
             year,
             month,
             totalKwh: parseFloat(totalKwh.toFixed(3)),
             estimatedCost: parseFloat((totalKwh * PLN_RATE).toFixed(0)),
             plnRate: PLN_RATE,
             days: result,
-        });
+        };
+
+        const ttl = isCurrentMonth ? DAILY_CACHE_TTL_CURRENT : DAILY_CACHE_TTL_PAST;
+        dailyUsageCache.set(cacheKey, { data: responseData, expiresAt: Date.now() + ttl });
+
+        return res.json(responseData);
     } catch (error) {
         log.error("daily-usage error", error.message);
         res.status(500).json({ error: error.message });

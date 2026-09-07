@@ -12,8 +12,18 @@ const BATTERY_CACHE_TTL = 30_000; // refresh baterai tiap 30s
 const outageLogCache = new Map(); // deviceId -> { logs, total, cachedAt }
 const OUTAGE_CACHE_TTL = 60_000; // refresh outage tiap 60s
 
+// Shared broadcast cache for PZEM data so multiple clients within the same interval tick share query results
+let pzemBroadcastCache = null;
+let pzemBroadcastCacheAt = 0;
+const BROADCAST_CACHE_TTL = 800; // 800ms cache
+
 // Mengambil data terakhir dari setiap device PZEM yang aktif
 const sendPzem = async () => {
+    const now = Date.now();
+    if (pzemBroadcastCache && (now - pzemBroadcastCacheAt) < BROADCAST_CACHE_TTL) {
+        return pzemBroadcastCache;
+    }
+
     try {
         const devices = await prisma.pzemDevice.findMany({
             where: { isActive: true },
@@ -102,10 +112,13 @@ const sendPzem = async () => {
             };
         }));
 
-        return {
+        const payload = {
             devices: results,
             serverBattery: batteryCache,
         };
+        pzemBroadcastCache = payload;
+        pzemBroadcastCacheAt = now;
+        return payload;
     } catch (error) {
         console.error("Error fetching PZEM data:", error);
         return { devices: [], serverBattery: null };

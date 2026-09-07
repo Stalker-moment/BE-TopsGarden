@@ -4,7 +4,7 @@
 
 // --- KONFIGURASI LCD ---
 // Sesuaikan alamat I2C (biasanya 0x27 atau 0x3F)
-LiquidCrystal_I2C lcd(0x3F, 20, 4); 
+LiquidCrystal_I2C lcd(0x27, 20, 4); 
 
 // --- KONFIGURASI KEYPAD 3x4 ---
 const byte ROWS = 4; // Empat baris
