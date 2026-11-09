@@ -2,6 +2,7 @@ import express from "express";
 import { prisma } from "../../prisma/client.js";
 import { createLogger } from "../../helper/logger.js";
 import { addPzemLog } from "../../ingestion/pzemBuffer.js";
+import { disaggregateTimeSeries, analyzeRealtimeLoad, KOS_APPLIANCES } from "../../functions/alinDisaggregation.js";
 
 const router = express.Router();
 const log = createLogger("PzemController");
@@ -1656,5 +1657,339 @@ function formatDuration(seconds) {
     const m = Math.floor((seconds % 3600) / 60);
     return `${h}j ${m}m`;
 }
+
+/**
+ * =========================================================================
+ * 11. ALIN NILM Disaggregation & Realtime Load Profiling (Khusus Kos)
+ * =========================================================================
+ */
+
+// GET /pzem/:id/available-dates
+router.get("/pzem/:id/available-dates", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const curDate = new Date();
+        const curYear = curDate.getFullYear();
+        const curMonth = curDate.getMonth() + 1;
+
+        // Ambil snapshot 60 hari terakhir
+        const snapshots = await prisma.pzemDailySnapshot.findMany({
+            where: { deviceId: id, deltaKwh: { gt: 0 } },
+            orderBy: { date: "desc" },
+            take: 60
+        });
+
+        const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+        const todayStr = curDate.toISOString().slice(0, 10);
+        const yesterday = new Date(curDate);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().slice(0, 10);
+
+        const dateMap = new Map();
+
+        // Tambahkan hari ini dan kemarin
+        dateMap.set(todayStr, {
+            date: todayStr,
+            label: `${String(curDate.getDate()).padStart(2, '0')} ${monthNames[curMonth - 1]} ${curYear} (Hari Ini)`,
+            kwh: 0,
+            isToday: true,
+            isYesterday: false
+        });
+
+        snapshots.forEach(s => {
+            const dateStr = s.date.toISOString().slice(0, 10);
+            const d = new Date(s.date);
+            const isToday = (dateStr === todayStr);
+            const isYesterday = (dateStr === yesterdayStr);
+            let label = `${String(d.getDate()).padStart(2, '0')} ${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+            if (isToday) label += " (Hari Ini)";
+            else if (isYesterday) label += " (Kemarin)";
+
+            dateMap.set(dateStr, {
+                date: dateStr,
+                label,
+                kwh: Number(s.deltaKwh) || 0,
+                isToday,
+                isYesterday
+            });
+        });
+
+        const dates = Array.from(dateMap.values()).sort((a, b) => b.date.localeCompare(a.date));
+
+        // Format bulan
+        const monthMap = new Map();
+        snapshots.forEach(s => {
+            const d = new Date(s.date);
+            const m = d.getMonth() + 1;
+            const y = d.getFullYear();
+            const key = `${y}-${m}`;
+            const existing = monthMap.get(key) || { month: m, year: y, label: `${monthNames[m - 1]} ${y}`, kwh: 0 };
+            existing.kwh += Number(s.deltaKwh) || 0;
+            monthMap.set(key, existing);
+        });
+
+        const months = Array.from(monthMap.values()).sort((a, b) => (b.year * 100 + b.month) - (a.year * 100 + a.month));
+
+        res.json({
+            deviceId: id,
+            dates,
+            months,
+            years: [2026]
+        });
+    } catch (error) {
+        log.error("available-dates error", error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// GET /pzem/:id/alin-realtime
+router.get("/pzem/:id/alin-realtime", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const latestLog = await prisma.pzemLog.findFirst({
+            where: { deviceId: id },
+            orderBy: { createdAt: "desc" }
+        });
+
+        const analysis = analyzeRealtimeLoad(latestLog);
+        res.json({
+            deviceId: id,
+            ...analysis
+        });
+    } catch (error) {
+        log.error("alin-realtime error", error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// GET /pzem/:id/alin-disaggregation?granularity=minutely|hourly|daily|monthly|yearly&date=YYYY-MM-DD&hour=14&year=2026&month=11
+router.get("/pzem/:id/alin-disaggregation", async (req, res) => {
+    try {
+        const { id } = req.params;
+        const granularity = req.query.granularity || "hourly";
+        const targetDateStr = req.query.date ? String(req.query.date) : new Date().toISOString().slice(0, 10);
+        const [yearStr, monthStr, dayStr] = targetDateStr.split("-").map(Number);
+        const reqYear = Number(req.query.year) || yearStr || new Date().getFullYear();
+        const reqMonth = Number(req.query.month) || monthStr || (new Date().getMonth() + 1);
+
+        let series = [];
+        let stepDurationHours = 1 / 60;
+
+        if (granularity === "minutely") {
+            const reqHour = req.query.hour !== undefined && req.query.hour !== "" ? Number(req.query.hour) : null;
+            let startDate, endDate;
+
+            if (reqHour !== null && !isNaN(reqHour)) {
+                startDate = new Date(yearStr, monthStr - 1, dayStr, reqHour, 0, 0, 0);
+                endDate = new Date(yearStr, monthStr - 1, dayStr, reqHour, 59, 59, 999);
+            } else {
+                startDate = new Date(yearStr, monthStr - 1, dayStr, 0, 0, 0, 0);
+                endDate = new Date(yearStr, monthStr - 1, dayStr, 23, 59, 59, 999);
+            }
+
+            const logs = await prisma.pzemLog.findMany({
+                where: { deviceId: id, createdAt: { gte: startDate, lte: endDate } },
+                orderBy: { createdAt: "asc" }
+            });
+
+            const minMap = {};
+            const totalMinutes = reqHour !== null ? 60 : 1440;
+            const startOffsetMin = reqHour !== null ? reqHour * 60 : 0;
+
+            for (let idx = 0; idx < totalMinutes; idx++) {
+                const totalM = startOffsetMin + idx;
+                const h = Math.floor(totalM / 60);
+                const m = totalM % 60;
+                const label = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                minMap[totalM] = {
+                    minuteIndex: totalM,
+                    label,
+                    count: 0,
+                    _powerSum: 0,
+                    _voltageSum: 0,
+                    _currentSum: 0
+                };
+            }
+
+            for (const l of logs) {
+                const d = new Date(l.createdAt);
+                const totalM = d.getHours() * 60 + d.getMinutes();
+                if (minMap[totalM]) {
+                    minMap[totalM].count++;
+                    minMap[totalM]._powerSum += Number(l.power) || 0;
+                    minMap[totalM]._voltageSum += Number(l.voltage) || 0;
+                    minMap[totalM]._currentSum += Number(l.current) || 0;
+                }
+            }
+
+            series = Object.values(minMap).map(m => {
+                const avgPower = m.count > 0 ? +(m._powerSum / m.count).toFixed(1) : 0;
+                const avgVoltage = m.count > 0 ? +(m._voltageSum / m.count).toFixed(1) : 220;
+                const avgCurrent = m.count > 0 ? +(m._currentSum / m.count).toFixed(2) : +(avgPower / avgVoltage).toFixed(2);
+                return {
+                    label: m.label,
+                    avgPower,
+                    avgVoltage,
+                    avgCurrent,
+                    usageKwh: +(avgPower / 1000 / 60).toFixed(5)
+                };
+            });
+            stepDurationHours = 1 / 60;
+
+        } else if (granularity === "hourly") {
+            const startDate = new Date(yearStr, monthStr - 1, dayStr, 0, 0, 0, 0);
+            const endDate = new Date(yearStr, monthStr - 1, dayStr, 23, 59, 59, 999);
+
+            const logs = await prisma.pzemLog.findMany({
+                where: { deviceId: id, createdAt: { gte: startDate, lte: endDate } },
+                orderBy: { createdAt: "asc" }
+            });
+
+            const hourMap = {};
+            for (let h = 0; h < 24; h++) {
+                hourMap[h] = {
+                    hour: h,
+                    label: `${String(h).padStart(2, '0')}:00`,
+                    count: 0,
+                    _powerSum: 0,
+                    _voltageSum: 0,
+                    _currentSum: 0
+                };
+            }
+
+            for (const l of logs) {
+                const h = new Date(l.createdAt).getHours();
+                if (hourMap[h]) {
+                    hourMap[h].count++;
+                    hourMap[h]._powerSum += Number(l.power) || 0;
+                    hourMap[h]._voltageSum += Number(l.voltage) || 0;
+                    hourMap[h]._currentSum += Number(l.current) || 0;
+                }
+            }
+
+            series = Object.values(hourMap).map(h => {
+                const avgPower = h.count > 0 ? +(h._powerSum / h.count).toFixed(1) : 0;
+                const avgVoltage = h.count > 0 ? +(h._voltageSum / h.count).toFixed(1) : 220;
+                const avgCurrent = h.count > 0 ? +(h._currentSum / h.count).toFixed(2) : +(avgPower / avgVoltage).toFixed(2);
+                return {
+                    label: h.label,
+                    avgPower,
+                    avgVoltage,
+                    avgCurrent,
+                    usageKwh: +(avgPower / 1000).toFixed(4)
+                };
+            });
+            stepDurationHours = 1;
+
+        } else if (granularity === "daily") {
+            const daysInMonth = new Date(reqYear, reqMonth, 0).getDate();
+            const startDate = new Date(reqYear, reqMonth - 1, 1, 0, 0, 0);
+            const endDate = new Date(reqYear, reqMonth - 1, daysInMonth, 23, 59, 59);
+
+            const snapshots = await prisma.pzemDailySnapshot.findMany({
+                where: { deviceId: id, date: { gte: startDate, lte: endDate } },
+                orderBy: { date: "asc" }
+            });
+
+            const snapMap = {};
+            snapshots.forEach(s => {
+                const dayNum = new Date(s.date).getDate();
+                snapMap[dayNum] = s;
+            });
+
+            series = Array.from({ length: daysInMonth }, (_, idx) => {
+                const day = idx + 1;
+                const snap = snapMap[day];
+                const kwh = snap ? Number(snap.deltaKwh) || 0 : 0;
+                const avgPower = +(kwh * 1000 / 24).toFixed(1);
+                const avgVoltage = snap ? Number(snap.avgVoltage) || 220 : 220;
+                const avgCurrent = +(avgPower / avgVoltage).toFixed(2);
+                return {
+                    label: `Tgl ${String(day).padStart(2, '0')}`,
+                    avgPower,
+                    avgVoltage,
+                    avgCurrent,
+                    usageKwh: kwh
+                };
+            });
+            stepDurationHours = 24;
+
+        } else if (granularity === "monthly") {
+            const startDate = new Date(reqYear, 0, 1);
+            const endDate = new Date(reqYear, 11, 31, 23, 59, 59);
+
+            const snapshots = await prisma.pzemDailySnapshot.findMany({
+                where: { deviceId: id, date: { gte: startDate, lte: endDate } },
+                orderBy: { date: "asc" }
+            });
+
+            const monthMap = {};
+            for (let m = 1; m <= 12; m++) monthMap[m] = 0;
+            snapshots.forEach(s => {
+                const m = new Date(s.date).getMonth() + 1;
+                monthMap[m] += Number(s.deltaKwh) || 0;
+            });
+
+            const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+            series = Array.from({ length: 12 }, (_, idx) => {
+                const m = idx + 1;
+                const kwh = +monthMap[m].toFixed(3);
+                const avgPower = +(kwh * 1000 / (30 * 24)).toFixed(1);
+                return {
+                    label: `${monthNames[idx]} ${reqYear}`,
+                    avgPower,
+                    avgVoltage: 220,
+                    avgCurrent: +(avgPower / 220).toFixed(2),
+                    usageKwh: kwh
+                };
+            });
+            stepDurationHours = 24 * 30;
+
+        } else if (granularity === "yearly") {
+            const curY = new Date().getFullYear();
+            const startY = curY - 4;
+            const startDate = new Date(startY, 0, 1);
+            const endDate = new Date(curY, 11, 31, 23, 59, 59);
+
+            const snapshots = await prisma.pzemDailySnapshot.findMany({
+                where: { deviceId: id, date: { gte: startDate, lte: endDate } },
+                orderBy: { date: "asc" }
+            });
+
+            const yearMap = {};
+            for (let y = startY; y <= curY; y++) yearMap[y] = 0;
+            snapshots.forEach(s => {
+                const y = new Date(s.date).getFullYear();
+                if (yearMap[y] !== undefined) yearMap[y] += Number(s.deltaKwh) || 0;
+            });
+
+            series = Object.keys(yearMap).map(y => {
+                const kwh = +yearMap[y].toFixed(3);
+                const avgPower = +(kwh * 1000 / (365 * 24)).toFixed(1);
+                return {
+                    label: `Tahun ${y}`,
+                    avgPower,
+                    avgVoltage: 220,
+                    avgCurrent: +(avgPower / 220).toFixed(2),
+                    usageKwh: kwh
+                };
+            });
+            stepDurationHours = 24 * 365;
+        }
+
+        const result = disaggregateTimeSeries(series, stepDurationHours);
+        res.json({
+            deviceId: id,
+            granularity,
+            targetDate: targetDateStr,
+            year: reqYear,
+            month: reqMonth,
+            ...result
+        });
+    } catch (error) {
+        log.error("alin-disaggregation error", error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 export default router;
