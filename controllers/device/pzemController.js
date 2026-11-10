@@ -303,15 +303,69 @@ router.post("/pzem/:id/reset-command", async (req, res) => {
     }
 });
 
-// 5. Historical Logs (Table)
+// 5. Historical Logs (Table / Time-window query)
 router.get("/pzem/:id/logs", async (req, res) => {
     try {
         const { id } = req.params;
-        const limit = Number(req.query.limit) || 20;
+        const limit = req.query.limit ? Math.min(10000, Math.max(1, Number(req.query.limit))) : (req.query.date || req.query.startDate ? 1000 : 20);
+        const order = req.query.order === "asc" ? "asc" : req.query.order === "desc" ? "desc" : null;
+
+        const whereClause = {};
+        if (id !== "all") {
+            whereClause.deviceId = id;
+        }
+
+        // Support explicit startDate / endDate OR date / hour / minute in WIB (UTC+7)
+        let start = null;
+        let end = null;
+
+        if (req.query.startDate) {
+            const d = new Date(req.query.startDate);
+            if (!isNaN(d.getTime())) start = d;
+        }
+        if (req.query.endDate) {
+            const d = new Date(req.query.endDate);
+            if (!isNaN(d.getTime())) end = d;
+        }
+
+        if (req.query.date && (!start || !end)) {
+            const dateStr = String(req.query.date).trim(); // Expected YYYY-MM-DD
+            const hasHour = req.query.hour !== undefined && req.query.hour !== "" && req.query.hour !== "all";
+            const hasMinute = req.query.minute !== undefined && req.query.minute !== "" && req.query.minute !== "all";
+
+            if (hasHour && hasMinute) {
+                const h = String(req.query.hour).padStart(2, "0");
+                const m = String(req.query.minute).padStart(2, "0");
+                start = start || new Date(`${dateStr}T${h}:${m}:00+07:00`);
+                end = end || new Date(`${dateStr}T${h}:${m}:59.999+07:00`);
+            } else if (hasHour) {
+                const h = String(req.query.hour).padStart(2, "0");
+                start = start || new Date(`${dateStr}T${h}:00:00+07:00`);
+                end = end || new Date(`${dateStr}T${h}:59:59.999+07:00`);
+            } else {
+                start = start || new Date(`${dateStr}T00:00:00+07:00`);
+                end = end || new Date(`${dateStr}T23:59:59.999+07:00`);
+            }
+        }
+
+        if (start && !isNaN(start.getTime()) && end && !isNaN(end.getTime())) {
+            whereClause.createdAt = {
+                gte: start,
+                lte: end
+            };
+        } else if (start && !isNaN(start.getTime())) {
+            whereClause.createdAt = { gte: start };
+        } else if (end && !isNaN(end.getTime())) {
+            whereClause.createdAt = { lte: end };
+        }
+
+        const hasTimeFilter = !!whereClause.createdAt;
+        const sortOrder = order || (hasTimeFilter ? "asc" : "desc");
 
         if (id === "all") {
             const logs = await prisma.pzemLog.findMany({
-                orderBy: { createdAt: 'desc' },
+                where: whereClause,
+                orderBy: { createdAt: sortOrder },
                 take: limit,
                 include: { device: true }
             });
@@ -332,14 +386,20 @@ router.get("/pzem/:id/logs", async (req, res) => {
         }
 
         const logs = await prisma.pzemLog.findMany({
-            where: { deviceId: req.params.id },
-            orderBy: { createdAt: 'desc' },
+            where: whereClause,
+            orderBy: { createdAt: sortOrder },
             take: limit
         });
         res.json(logs);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
+});
+
+// Alias: /pzem/:id/raw-logs and /pzem/:id/detailed-logs
+router.get(["/pzem/:id/raw-logs", "/pzem/:id/detailed-logs"], async (req, res, next) => {
+    req.url = req.url.replace(/\/pzem\/([^/]+)\/(raw|detailed)-logs/, "/pzem/$1/logs");
+    return router.handle(req, res, next);
 });
 
 // 6. Chart Data (Live Trend - last 50 points)
