@@ -32,7 +32,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "nodemon server.js",
-    "db-push": "prisma db push && prisma generate"
+    "db-push": "prisma db push && prisma generate",
+    "test:pzem-history": "node --test tests/pzem-history.test.js"
   },
   "keywords": [],
   "type": "module",

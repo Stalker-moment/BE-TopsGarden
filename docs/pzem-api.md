@@ -191,3 +191,15 @@ Digunakan untuk monitoring realtime tanpa polling terus menerus dari frontend.
 
 1. **Reset Bulanan**: Sediakan tombol "Reset KWh" di menu setting atau dashboard. Panggil endpoint `POST /:id/reset-command` saat diklik. Tampilkan loading/status "Pending Reset" sampai angka energi di dashboard kembali ke 0.
 2. **Grafik**: Gunakan endpoint `GET /:id/chart` untuk inisialisasi awal grafik, lalu update data terbaru via WebSocket atau polling `GET /:id/latest`.
+
+## Riwayat PZEM dalam WIB dan arus rata-rata
+
+Endpoint `/api/device/pzem/:id/hourly-usage?date=2026-11-09` sekarang menyertakan `avgCurrent` (A, tiga desimal), `currentSampleCount`, dan jumlah log sesungguhnya pada `count`. Contoh dua sampel 0 A dan 0,004 A menghasilkan avgCurrent 0,002 A, bukan 0,000 A. `null` menyatakan tidak ada sampel arus valid; nol terukur tetap 0. Nilai hilang, negatif, nonfinite atau di atas 120 A tidak dihitung sebagai arus nol. Endpoint minutely-usage mengikuti aturan yang sama. Untuk id=all, avgCurrent adalah jumlah rata-rata per perangkat, sedangkan currentSampleCount/count merupakan jumlah sampel perangkat yang digabung.
+
+Batas tanggal dan pengelompokan jam/menit pada dua endpoint tersebut memakai WIB secara eksplisit, independen dari zona waktu host. Tanggal 9 November dimulai 8 November pukul 17.00 UTC dan berakhir 9 November pukul 16.59.59,999 UTC.
+
+Endpoint `/api/device/pzem/:id/logs` mendukung `date`, `hour`, `minute`, atau `startDate`/`endDate` ISO dengan zona waktu. Query tanpa filter tetap mengambil log terbaru. Query historis kosong mengembalikan array kosong; tidak kembali ke log terbaru. Filter tidak valid, rentang terbalik, order selain asc/desc, dan limit di luar 1–10000 menghasilkan HTTP 400 sebelum query database. Respons tetap array agar konsumen lama kompatibel.
+
+Validasi lokal: `npm run test:pzem-history`. Pengujian mengeksekusi handler controller dengan repository Prisma tiruan dan data fixture, tanpa koneksi database atau perubahan data. Jalankan pula dengan TZ=UTC untuk memeriksa batas WIB.
+
+Perubahan ini tidak memerlukan migrasi schema. Deploy versi backend terbaru dan restart layanan yang menyajikan API sensor agar frontend Wattara menerima avgCurrent. Verifikasi endpoint hourly-usage tanggal historis terhadap log yang memang tersimpan. Setelah backend aktif, klik Segarkan di Wattara untuk melewati cache rentang; nilai historis tidak dapat dipulihkan bila lognya sudah dihapus.

@@ -1,3 +1,4 @@
+import { wibDate, wibWindow, wibParts, logQuery, addCurrent, averageCurrent } from "../../functions/pzemHistory.js";
 import express from "express";
 import { prisma } from "../../prisma/client.js";
 import { createLogger } from "../../helper/logger.js";
@@ -307,66 +308,11 @@ router.post("/pzem/:id/reset-command", async (req, res) => {
 router.get("/pzem/:id/logs", async (req, res) => {
     try {
         const { id } = req.params;
-        const limit = req.query.limit ? Math.min(10000, Math.max(1, Number(req.query.limit))) : (req.query.date || req.query.startDate ? 1000 : 20);
-        const order = req.query.order === "asc" ? "asc" : req.query.order === "desc" ? "desc" : null;
-
-        const whereClause = {};
-        if (id !== "all") {
-            whereClause.deviceId = id;
-        }
-
-        // Support explicit startDate / endDate OR date / hour / minute in WIB (UTC+7)
-        let start = null;
-        let end = null;
-
-        if (req.query.startDate) {
-            const d = new Date(req.query.startDate);
-            if (!isNaN(d.getTime())) start = d;
-        }
-        if (req.query.endDate) {
-            const d = new Date(req.query.endDate);
-            if (!isNaN(d.getTime())) end = d;
-        }
-
-        if (req.query.date && (!start || !end)) {
-            const dateStr = String(req.query.date).trim(); // Expected YYYY-MM-DD
-            const hasHour = req.query.hour !== undefined && req.query.hour !== "" && req.query.hour !== "all";
-            const hasMinute = req.query.minute !== undefined && req.query.minute !== "" && req.query.minute !== "all";
-
-            if (hasHour && hasMinute) {
-                const h = String(req.query.hour).padStart(2, "0");
-                const m = String(req.query.minute).padStart(2, "0");
-                start = start || new Date(`${dateStr}T${h}:${m}:00+07:00`);
-                end = end || new Date(`${dateStr}T${h}:${m}:59.999+07:00`);
-            } else if (hasHour) {
-                const h = String(req.query.hour).padStart(2, "0");
-                start = start || new Date(`${dateStr}T${h}:00:00+07:00`);
-                end = end || new Date(`${dateStr}T${h}:59:59.999+07:00`);
-            } else {
-                start = start || new Date(`${dateStr}T00:00:00+07:00`);
-                end = end || new Date(`${dateStr}T23:59:59.999+07:00`);
-            }
-        }
-
-        if (start && !isNaN(start.getTime()) && end && !isNaN(end.getTime())) {
-            whereClause.createdAt = {
-                gte: start,
-                lte: end
-            };
-        } else if (start && !isNaN(start.getTime())) {
-            whereClause.createdAt = { gte: start };
-        } else if (end && !isNaN(end.getTime())) {
-            whereClause.createdAt = { lte: end };
-        }
-
-        const hasTimeFilter = !!whereClause.createdAt;
-        const sortOrder = order || (hasTimeFilter ? "asc" : "desc");
+        const query = logQuery(req.query, id);
 
         if (id === "all") {
             const logs = await prisma.pzemLog.findMany({
-                where: whereClause,
-                orderBy: { createdAt: sortOrder },
-                take: limit,
+                ...query,
                 include: { device: true }
             });
             const formatted = logs.map(l => ({
@@ -386,13 +332,11 @@ router.get("/pzem/:id/logs", async (req, res) => {
         }
 
         const logs = await prisma.pzemLog.findMany({
-            where: whereClause,
-            orderBy: { createdAt: sortOrder },
-            take: limit
+            ...query
         });
         res.json(logs);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        res.status(error.status || 500).json({ error: error.message });
     }
 });
 
@@ -1250,21 +1194,20 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
     try {
 
         const { id } = req.params;
-        const targetDateStr = req.query.date ? String(req.query.date) : new Date().toISOString().slice(0, 10);
+        const targetDateStr = req.query.date ? String(req.query.date) : wibDate();
 
+        wibWindow(targetDateStr);
         if (id === "all") {
             const activeDevices = await prisma.pzemDevice.findMany({ where: { isActive: true } });
             
             const hourMap = {};
             for (let h = 0; h < 24; h++) {
                 const label = `${String(h).padStart(2, '0')}:00`;
-                hourMap[h] = { hour: h, label, avgPower: 0, maxPower: 0, avgVoltage: 0, usageKwh: 0, count: 0, activeCount: 0 };
+                hourMap[h] = { hour: h, label, avgPower: 0, maxPower: 0, avgVoltage: 0, avgCurrent: 0, currentSampleCount: 0, usageKwh: 0, count: 0, activeCount: 0 };
             }
             
             for (const d of activeDevices) {
-                const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
-                const startDate = new Date(yearStr, monthStr - 1, dayStr, 0, 0, 0, 0);
-                const endDate = new Date(yearStr, monthStr - 1, dayStr, 23, 59, 59, 999);
+                const { start: startDate, end: endDate } = wibWindow(targetDateStr);
                 
                 const logs = await prisma.pzemLog.findMany({
                     where: { deviceId: d.id, createdAt: { gte: startDate, lte: endDate } },
@@ -1285,12 +1228,13 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
                     if (isNaN(v) || v < 0 || v > 350) v = 0;
                     if (isNaN(e) || e < 0 || e > 100000) e = 0;
                     
-                    const h = new Date(logItem.createdAt).getHours();
+                    const h = wibParts(logItem.createdAt).hour;
                     if (deviceHours[h]) {
                         const dh = deviceHours[h];
                         dh.count += 1;
                         dh._powerSum += p;
                         dh._voltageSum += v;
+                        addCurrent(dh, logItem.current);
                         if (p > dh.maxPower) dh.maxPower = p;
                         if (e > 0) {
                             if (dh._minEnergy === null || e < dh._minEnergy) dh._minEnergy = e;
@@ -1315,6 +1259,9 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
                     }
                     
                     hourMap[h].usageKwh += usageKwh;
+                    hourMap[h].count += dh.count;
+                    hourMap[h].currentSampleCount += dh._currentCount || 0;
+                    hourMap[h].avgCurrent += averageCurrent(dh) ?? 0;
                     hourMap[h].avgPower += avgPower;
                     hourMap[h].maxPower += dh.maxPower;
                     if (avgVoltage > 0) {
@@ -1334,7 +1281,9 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
                     maxPower: parseFloat(h.maxPower.toFixed(1)),
                     avgVoltage: h.activeCount > 0 ? parseFloat((h.avgVoltage / h.activeCount).toFixed(1)) : 0,
                     usageKwh: parseFloat(h.usageKwh.toFixed(4)),
-                    count: 60
+                    avgCurrent: h.currentSampleCount ? Number(h.avgCurrent.toFixed(3)) : null,
+                    currentSampleCount: h.currentSampleCount,
+                    count: h.count
                 };
             });
             
@@ -1348,9 +1297,7 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
             });
         }
         
-        const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
-        const startDate = new Date(yearStr, monthStr - 1, dayStr, 0, 0, 0, 0);
-        const endDate = new Date(yearStr, monthStr - 1, dayStr, 23, 59, 59, 999);
+        const { start: startDate, end: endDate } = wibWindow(targetDateStr);
 
         const logs = await prisma.pzemLog.findMany({
             where: {
@@ -1389,12 +1336,13 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
             if (isNaN(v) || v < 0 || v > 350) v = 0;
             if (isNaN(e) || e < 0 || e > 100000) e = 0;
 
-            const h = new Date(logItem.createdAt).getHours();
+            const h = wibParts(logItem.createdAt).hour;
             if (hourMap[h]) {
                 const item = hourMap[h];
                 item.count += 1;
                 item._powerSum += p;
                 item._voltageSum += v;
+                addCurrent(item, logItem.current);
                 if (p > item.maxPower) item.maxPower = p;
 
                 if (e > 0) {
@@ -1436,6 +1384,8 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
                 avgPower,
                 maxPower: parseFloat(h.maxPower.toFixed(1)),
                 avgVoltage,
+                avgCurrent: averageCurrent(h),
+                currentSampleCount: h._currentCount || 0,
                 usageKwh,
                 count: h.count,
             };
@@ -1452,7 +1402,7 @@ router.get("/pzem/:id/hourly-usage", async (req, res) => {
         });
     } catch (error) {
         log.error("hourly-usage error", error.message);
-        res.status(500).json({ error: error.message });
+        res.status(error.status || 500).json({ error: error.message });
     }
 });
 
@@ -1464,22 +1414,21 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
     try {
         const { id } = req.params;
         const now = new Date();
-        const targetDateStr = req.query.date ? String(req.query.date) : now.toISOString().slice(0, 10);
-        const targetHour = req.query.hour !== undefined ? Number(req.query.hour) : now.getHours();
+        const targetDateStr = req.query.date ? String(req.query.date) : wibDate(now);
+        const targetHour = req.query.hour !== undefined ? Number(req.query.hour) : wibParts(now).hour;
 
+        wibWindow(targetDateStr, targetHour);
         if (id === "all") {
             const activeDevices = await prisma.pzemDevice.findMany({ where: { isActive: true } });
             
             const minuteMap = {};
             for (let m = 0; m < 60; m++) {
                 const label = `${String(targetHour).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-                minuteMap[m] = { minute: m, label, avgPower: 0, avgVoltage: 0, avgCurrent: 0, usageKwh: 0, activeCount: 0 };
+                minuteMap[m] = { minute: m, label, avgPower: 0, avgVoltage: 0, avgCurrent: 0, currentSampleCount: 0, count: 0, usageKwh: 0, activeCount: 0 };
             }
             
             for (const d of activeDevices) {
-                const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
-                const startDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 0, 0, 0);
-                const endDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 59, 59, 999);
+                const { start: startDate, end: endDate } = wibWindow(targetDateStr, targetHour);
                 
                 const logs = await prisma.pzemLog.findMany({
                     where: { deviceId: d.id, createdAt: { gte: startDate, lte: endDate } },
@@ -1494,19 +1443,17 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
                 for (const logItem of logs) {
                     let p = logItem.power;
                     let v = logItem.voltage;
-                    let a = logItem.current;
                     
                     if (isNaN(p) || p < 0 || p > 25000) p = 0;
                     if (isNaN(v) || v < 0 || v > 350) v = 0;
-                    if (isNaN(a) || a < 0 || a > 120) a = 0;
                     
-                    const m = new Date(logItem.createdAt).getMinutes();
+                    const m = wibParts(logItem.createdAt).minute;
                     if (deviceMinutes[m]) {
                         const dm = deviceMinutes[m];
                         dm.count += 1;
                         dm._powerSum += p;
                         dm._voltageSum += v;
-                        dm._currentSum += a;
+                        addCurrent(dm, logItem.current);
                     }
                 }
                 
@@ -1514,13 +1461,15 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
                     const dm = deviceMinutes[m];
                     const avgPower = dm.count > 0 ? dm._powerSum / dm.count : 0;
                     const avgVoltage = dm.count > 0 ? dm._voltageSum / dm.count : 0;
-                    const avgCurrent = dm.count > 0 ? dm._currentSum / dm.count : 0;
+                    const avgCurrent = averageCurrent(dm);
                     
                     const usageKwh = (avgPower / 1000) / 60;
                     
                     minuteMap[m].usageKwh += usageKwh;
                     minuteMap[m].avgPower += avgPower;
-                    minuteMap[m].avgCurrent += avgCurrent;
+                    minuteMap[m].avgCurrent += avgCurrent ?? 0;
+                    minuteMap[m].currentSampleCount += dm._currentCount || 0;
+                    minuteMap[m].count += dm.count;
                     if (avgVoltage > 0) {
                         minuteMap[m].avgVoltage += avgVoltage;
                         minuteMap[m].activeCount += 1;
@@ -1535,10 +1484,11 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
                     minute: m.minute,
                     label: m.label,
                     avgPower: parseFloat(m.avgPower.toFixed(1)),
-                    avgCurrent: parseFloat(m.avgCurrent.toFixed(2)),
+                    avgCurrent: m.currentSampleCount ? Number(m.avgCurrent.toFixed(3)) : null,
+                    currentSampleCount: m.currentSampleCount,
                     avgVoltage: m.activeCount > 0 ? parseFloat((m.avgVoltage / m.activeCount).toFixed(1)) : 0,
                     usageKwh: parseFloat(m.usageKwh.toFixed(5)),
-                    count: 1
+                    count: m.count
                 };
             });
             
@@ -1553,9 +1503,7 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
             });
         }
 
-        const [yearStr, monthStr, dayStr] = targetDateStr.split('-').map(Number);
-        const startDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 0, 0, 0);
-        const endDate = new Date(yearStr, monthStr - 1, dayStr, targetHour, 59, 59, 999);
+        const { start: startDate, end: endDate } = wibWindow(targetDateStr, targetHour);
 
         const logs = await prisma.pzemLog.findMany({
             where: {
@@ -1586,20 +1534,18 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
         for (const logItem of logs) {
             let p = logItem.power;
             let v = logItem.voltage;
-            let a = logItem.current;
 
             // Filter data sampah / noise dari sensor (> 25000 W, > 350 V, > 120 A, < 0)
             if (isNaN(p) || p < 0 || p > 25000) p = 0;
             if (isNaN(v) || v < 0 || v > 350) v = 0;
-            if (isNaN(a) || a < 0 || a > 120) a = 0;
 
-            const m = new Date(logItem.createdAt).getMinutes();
+            const m = wibParts(logItem.createdAt).minute;
             if (minuteMap[m]) {
                 const item = minuteMap[m];
                 item.count += 1;
                 item._powerSum += p;
                 item._voltageSum += v;
-                item._currentSum += a;
+                addCurrent(item, logItem.current);
             }
         }
 
@@ -1608,7 +1554,7 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
         const minutes = Object.values(minuteMap).map(m => {
             const avgPower = m.count > 0 ? parseFloat((m._powerSum / m.count).toFixed(1)) : 0;
             const avgVoltage = m.count > 0 ? parseFloat((m._voltageSum / m.count).toFixed(1)) : 0;
-            const avgCurrent = m.count > 0 ? parseFloat((m._currentSum / m.count).toFixed(2)) : 0;
+            const avgCurrent = averageCurrent(m);
             const usageKwh = parseFloat(((avgPower / 1000) / 60).toFixed(5)); // Wh / 60 menit
 
             totalKwh += usageKwh;
@@ -1619,6 +1565,7 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
                 avgPower,
                 avgVoltage,
                 avgCurrent,
+                currentSampleCount: m._currentCount || 0,
                 usageKwh,
                 count: m.count,
             };
@@ -1635,7 +1582,7 @@ router.get("/pzem/:id/minutely-usage", async (req, res) => {
         });
     } catch (error) {
         log.error("minutely-usage error", error.message);
-        res.status(500).json({ error: error.message });
+        res.status(error.status || 500).json({ error: error.message });
     }
 });
 
